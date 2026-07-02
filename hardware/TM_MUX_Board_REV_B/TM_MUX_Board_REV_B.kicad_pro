@@ -1,0 +1,989 @@
+{
+  "board": {
+    "3dviewports": [],
+    "design_settings": {
+      "defaults": {
+        "apply_defaults_to_fp_barcodes": false,
+        "apply_defaults_to_fp_dimensions": false,
+        "apply_defaults_to_fp_fields": false,
+        "apply_defaults_to_fp_shapes": false,
+        "apply_defaults_to_fp_text": false,
+        "board_outline_line_width": 0.05,
+        "copper_line_width": 0.2,
+        "copper_text_italic": false,
+        "copper_text_size_h": 1.5,
+        "copper_text_size_v": 1.5,
+        "copper_text_thickness": 0.3,
+        "copper_text_upright": false,
+        "courtyard_line_width": 0.05,
+        "dimension_precision": 4,
+        "dimension_units": 3,
+        "dimensions": {
+          "arrow_length": 1270000,
+          "extension_offset": 500000,
+          "keep_text_aligned": true,
+          "suppress_zeroes": true,
+          "text_position": 0,
+          "units_format": 0
+        },
+        "fab_line_width": 0.1,
+        "fab_text_italic": false,
+        "fab_text_size_h": 1.0,
+        "fab_text_size_v": 1.0,
+        "fab_text_thickness": 0.15,
+        "fab_text_upright": false,
+        "other_line_width": 0.1,
+        "other_text_italic": false,
+        "other_text_size_h": 1.0,
+        "other_text_size_v": 1.0,
+        "other_text_thickness": 0.15,
+        "other_text_upright": false,
+        "pads": {
+          "drill": 0.8,
+          "height": 1.27,
+          "width": 2.54
+        },
+        "silk_line_width": 0.1,
+        "silk_text_italic": false,
+        "silk_text_size_h": 1.0,
+        "silk_text_size_v": 1.0,
+        "silk_text_thickness": 0.1,
+        "silk_text_upright": false,
+        "zones": {
+          "min_clearance": 0.3
+        }
+      },
+      "diff_pair_dimensions": [
+        {
+          "gap": 0.0,
+          "via_gap": 0.0,
+          "width": 0.0
+        }
+      ],
+      "drc_exclusions": [
+        [
+          "copper_edge_clearance|130508603|124700000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|24b968d1-484f-409e-abad-6ee7ca50e2c2",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130508603|124700000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|7346dbe2-b5a6-452d-b950-1604b656f478",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130511352|128950000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|4e6b6bc1-0f49-49fc-a3a0-926e1393588f",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130514101|133200000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|c76a8ec2-1c84-4538-963b-afaa85d9aaf1",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130514101|133200000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|d86f939c-e701-48a7-9450-53992da9a913",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130520925|143750000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|8776a34a-18ef-4e9f-afeb-1542e1aa91c9",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130520925|143750000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|967ffdf2-431a-49b0-afaf-2589834e2f79",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130523674|148000000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|8846c899-32db-464d-8db8-f2c393c4b611",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130526423|152250000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|09254b9d-2f56-4fc3-a350-16d9d6d48b5e",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130526423|152250000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|dcd99458-f975-4e30-9d67-6b490e70da3d",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130540000|184200000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|158328e5-7f21-42dd-ae81-787356e2119c",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130540000|184200000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|5d593369-dca0-4a77-8f33-8c43e182ce36",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130540000|188450000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|7b77bd74-9db9-4489-9b0c-5a583a51d551",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130540000|192700000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|c61234ac-2a11-4eeb-9099-fafa788aa917",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130540000|192700000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|e285e6d8-8859-41a9-a837-b113e869d2cc",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130540000|203250000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|347efdae-75e1-4259-acf2-1414bb270bf7",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130540000|203250000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|b16c9eb3-3cdd-4c2e-92d4-1d09f75fa84d",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130540000|207500000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|2bdcaca9-9e81-425a-8940-93aa5de92460",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130540000|211750000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|0fe823ca-5b9c-460b-8622-25d5337d3c6f",
+          ""
+        ],
+        [
+          "copper_edge_clearance|130540000|211750000|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|ea365f0d-5c21-48fd-bc3e-e50dd52c0620",
+          ""
+        ],
+        [
+          "lib_footprint_mismatch|108750000|244600000|17d2cd06-3092-4d56-a3ef-911cd570f462|00000000-0000-0000-0000-000000000000",
+          ""
+        ],
+        [
+          "lib_footprint_mismatch|108750000|253500000|2645ed2c-4469-482a-9872-8f15b49d3d4a|00000000-0000-0000-0000-000000000000",
+          ""
+        ],
+        [
+          "silk_edge_clearance|130576804|230139190|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|d45acc4c-fcfa-4257-a2bb-e3b9569cc739",
+          ""
+        ],
+        [
+          "silk_edge_clearance|130589463|249709895|e6cf79e3-b41b-4ff9-bdd9-5602b2375388|cdaa2532-7aaf-4cf4-b4fc-37da9b153d9d",
+          ""
+        ],
+        [
+          "silk_edge_clearance|48500000|106700000|b8cf9af8-68de-478d-b779-978d98776219|2b13a9b2-c513-4f49-880c-6ebb4d03860b",
+          ""
+        ],
+        [
+          "silk_edge_clearance|48500000|121700000|b8cf9af8-68de-478d-b779-978d98776219|82c61725-2d68-4c97-af85-231b6b09719e",
+          ""
+        ],
+        [
+          "silk_edge_clearance|48500000|132100000|b8cf9af8-68de-478d-b779-978d98776219|bd146181-f9d9-4acc-9fc6-3a695bde3111",
+          ""
+        ],
+        [
+          "silk_edge_clearance|48500000|147100000|b8cf9af8-68de-478d-b779-978d98776219|4d33fbd3-170a-4acb-b9ef-f841de170a1e",
+          ""
+        ],
+        [
+          "silk_edge_clearance|48500000|163000000|b8cf9af8-68de-478d-b779-978d98776219|3d661dcd-805e-471b-9de5-c48766a974cd",
+          ""
+        ],
+        [
+          "silk_edge_clearance|48500000|178000000|b8cf9af8-68de-478d-b779-978d98776219|c53575e2-59af-4f37-ac8e-5c7b682ffd55",
+          ""
+        ],
+        [
+          "silk_edge_clearance|48500000|188400000|b8cf9af8-68de-478d-b779-978d98776219|cdce3668-8d77-4a36-ad4d-b825de0f7075",
+          ""
+        ],
+        [
+          "silk_edge_clearance|48500000|203400000|b8cf9af8-68de-478d-b779-978d98776219|7fb7eac9-e276-4cd0-96e3-8c09ef6047a7",
+          ""
+        ],
+        [
+          "silk_edge_clearance|48500000|213800000|b8cf9af8-68de-478d-b779-978d98776219|82425f25-6982-4be5-8748-d077f624f890",
+          ""
+        ],
+        [
+          "silk_edge_clearance|48500000|228800000|b8cf9af8-68de-478d-b779-978d98776219|97da7834-d1cb-4cc6-bfd7-bb7cb6b1ca4f",
+          ""
+        ],
+        [
+          "silk_edge_clearance|48500000|239200000|b8cf9af8-68de-478d-b779-978d98776219|d21184bd-ce34-48db-a26d-c828dda01fb2",
+          ""
+        ],
+        [
+          "silk_edge_clearance|48500000|254200000|b8cf9af8-68de-478d-b779-978d98776219|1d58c97e-4e77-4b32-8ac3-791a7be663e3",
+          ""
+        ],
+        [
+          "silk_overlap|124290000|129950000|c8e0ab1d-017b-4d92-a919-f250b30c1693|fa712382-599b-4855-be00-9814d65b142e",
+          ""
+        ],
+        [
+          "silk_overlap|124290000|149000000|1926d6bd-0681-45d0-908f-76faacbc7fa5|c49ba75b-470b-4c3f-8598-d9fb1eb44304",
+          ""
+        ],
+        [
+          "silk_overlap|124350000|129920000|bc79f58a-f4e8-489d-a436-6b064126d815|fa712382-599b-4855-be00-9814d65b142e",
+          ""
+        ],
+        [
+          "silk_overlap|124350000|148970000|339784fc-14f9-4a0c-a870-1a08ac7a225d|c49ba75b-470b-4c3f-8598-d9fb1eb44304",
+          ""
+        ],
+        [
+          "silk_overlap|124350000|189050000|911deb6c-48f1-4753-824e-d215f9616d94|997ca16f-acbe-4177-ab3b-c29ffba63dfe",
+          ""
+        ],
+        [
+          "silk_overlap|124350000|189050000|911deb6c-48f1-4753-824e-d215f9616d94|dfb585be-3043-4d96-8c5f-daee237fff72",
+          ""
+        ],
+        [
+          "silk_overlap|124350000|189420000|911deb6c-48f1-4753-824e-d215f9616d94|f91a82c2-69ea-43f7-9bb8-18bf1fdcb7cf",
+          ""
+        ],
+        [
+          "silk_overlap|124550000|208370000|c59e0178-a331-49da-8d6d-0165f5389753|e43b3aca-d73e-4016-a942-cbb100cbfe72",
+          ""
+        ],
+        [
+          "silk_overlap|124558000|208134000|078fedfe-708f-4722-908c-25c4d9681e1d|e43b3aca-d73e-4016-a942-cbb100cbfe72",
+          ""
+        ]
+      ],
+      "meta": {
+        "version": 2
+      },
+      "rule_severities": {
+        "annular_width": "error",
+        "clearance": "error",
+        "connection_width": "warning",
+        "copper_edge_clearance": "error",
+        "copper_sliver": "warning",
+        "courtyards_overlap": "error",
+        "creepage": "error",
+        "diff_pair_gap_out_of_range": "error",
+        "diff_pair_uncoupled_length_too_long": "error",
+        "drill_out_of_range": "error",
+        "duplicate_footprints": "warning",
+        "extra_footprint": "warning",
+        "footprint": "error",
+        "footprint_filters_mismatch": "ignore",
+        "footprint_symbol_field_mismatch": "warning",
+        "footprint_symbol_mismatch": "warning",
+        "footprint_type_mismatch": "ignore",
+        "hole_clearance": "error",
+        "hole_to_hole": "warning",
+        "holes_co_located": "warning",
+        "invalid_outline": "error",
+        "isolated_copper": "warning",
+        "item_on_disabled_layer": "error",
+        "items_not_allowed": "error",
+        "length_out_of_range": "error",
+        "lib_footprint_issues": "warning",
+        "lib_footprint_mismatch": "warning",
+        "malformed_courtyard": "error",
+        "microvia_drill_out_of_range": "error",
+        "mirrored_text_on_front_layer": "warning",
+        "missing_courtyard": "ignore",
+        "missing_footprint": "warning",
+        "missing_tuning_profile": "warning",
+        "net_conflict": "warning",
+        "nonmirrored_text_on_back_layer": "warning",
+        "npth_inside_courtyard": "ignore",
+        "padstack": "warning",
+        "pth_inside_courtyard": "ignore",
+        "shorting_items": "error",
+        "silk_edge_clearance": "warning",
+        "silk_over_copper": "warning",
+        "silk_overlap": "warning",
+        "skew_out_of_range": "error",
+        "solder_mask_bridge": "error",
+        "starved_thermal": "error",
+        "text_height": "warning",
+        "text_on_edge_cuts": "error",
+        "text_thickness": "warning",
+        "through_hole_pad_without_hole": "error",
+        "too_many_vias": "error",
+        "track_angle": "error",
+        "track_dangling": "warning",
+        "track_not_centered_on_via": "ignore",
+        "track_on_post_machined_layer": "error",
+        "track_segment_length": "error",
+        "track_width": "error",
+        "tracks_crossing": "error",
+        "tuning_profile_track_geometries": "ignore",
+        "unconnected_items": "error",
+        "unresolved_variable": "error",
+        "via_dangling": "warning",
+        "zones_intersect": "error"
+      },
+      "rules": {
+        "max_error": 0.005,
+        "min_clearance": 0.0,
+        "min_connection": 0.0,
+        "min_copper_edge_clearance": 0.5,
+        "min_groove_width": 0.0,
+        "min_hole_clearance": 0.25,
+        "min_hole_to_hole": 0.25,
+        "min_microvia_diameter": 0.2,
+        "min_microvia_drill": 0.1,
+        "min_resolved_spokes": 2,
+        "min_silk_clearance": 0.0,
+        "min_text_height": 0.8,
+        "min_text_thickness": 0.08,
+        "min_through_hole_diameter": 0.25,
+        "min_track_width": 0.0,
+        "min_via_annular_width": 0.125,
+        "min_via_diameter": 0.6,
+        "solder_mask_to_copper_clearance": 0.0,
+        "use_height_for_length_calcs": true
+      },
+      "teardrop_options": [
+        {
+          "td_onpthpad": true,
+          "td_onroundshapesonly": false,
+          "td_onsmdpad": true,
+          "td_ontrackend": false,
+          "td_onvia": true
+        }
+      ],
+      "teardrop_parameters": [
+        {
+          "td_allow_use_two_tracks": true,
+          "td_curve_segcount": 0,
+          "td_height_ratio": 1.0,
+          "td_length_ratio": 0.5,
+          "td_maxheight": 2.0,
+          "td_maxlen": 1.0,
+          "td_on_pad_in_zone": false,
+          "td_target_name": "td_round_shape",
+          "td_width_to_size_filter_ratio": 0.9
+        },
+        {
+          "td_allow_use_two_tracks": true,
+          "td_curve_segcount": 0,
+          "td_height_ratio": 1.0,
+          "td_length_ratio": 0.5,
+          "td_maxheight": 2.0,
+          "td_maxlen": 1.0,
+          "td_on_pad_in_zone": false,
+          "td_target_name": "td_rect_shape",
+          "td_width_to_size_filter_ratio": 0.9
+        },
+        {
+          "td_allow_use_two_tracks": true,
+          "td_curve_segcount": 0,
+          "td_height_ratio": 1.0,
+          "td_length_ratio": 0.5,
+          "td_maxheight": 2.0,
+          "td_maxlen": 1.0,
+          "td_on_pad_in_zone": false,
+          "td_target_name": "td_track_end",
+          "td_width_to_size_filter_ratio": 0.9
+        }
+      ],
+      "track_widths": [
+        0.0,
+        0.6
+      ],
+      "tuning_pattern_settings": {
+        "diff_pair_defaults": {
+          "corner_radius_percentage": 80,
+          "corner_style": 1,
+          "max_amplitude": 1.0,
+          "min_amplitude": 0.2,
+          "single_sided": false,
+          "spacing": 1.0
+        },
+        "diff_pair_skew_defaults": {
+          "corner_radius_percentage": 80,
+          "corner_style": 1,
+          "max_amplitude": 1.0,
+          "min_amplitude": 0.2,
+          "single_sided": false,
+          "spacing": 0.6
+        },
+        "single_track_defaults": {
+          "corner_radius_percentage": 80,
+          "corner_style": 1,
+          "max_amplitude": 1.0,
+          "min_amplitude": 0.2,
+          "single_sided": false,
+          "spacing": 0.6
+        }
+      },
+      "via_dimensions": [
+        {
+          "diameter": 0.0,
+          "drill": 0.0
+        },
+        {
+          "diameter": 0.8,
+          "drill": 0.3
+        }
+      ],
+      "zones_allow_external_fillets": false
+    },
+    "ipc2581": {
+      "bom_rev": "",
+      "dist": "",
+      "distpn": "",
+      "internal_id": "",
+      "mfg": "",
+      "mpn": "",
+      "sch_revision": "B"
+    },
+    "layer_pairs": [],
+    "layer_presets": [],
+    "viewports": []
+  },
+  "boards": [],
+  "component_class_settings": {
+    "assignments": [],
+    "meta": {
+      "version": 0
+    },
+    "sheet_component_classes": {
+      "enabled": false
+    }
+  },
+  "cvpcb": {
+    "equivalence_files": []
+  },
+  "erc": {
+    "erc_exclusions": [],
+    "meta": {
+      "version": 0
+    },
+    "pin_map": [
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        2
+      ],
+      [
+        0,
+        2,
+        0,
+        1,
+        0,
+        0,
+        1,
+        0,
+        2,
+        2,
+        2,
+        2
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        1,
+        0,
+        1,
+        2
+      ],
+      [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        2,
+        1,
+        1,
+        2
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        2
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2
+      ],
+      [
+        1,
+        1,
+        1,
+        1,
+        1,
+        0,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2
+      ],
+      [
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        2
+      ],
+      [
+        0,
+        2,
+        1,
+        2,
+        0,
+        0,
+        1,
+        0,
+        2,
+        2,
+        2,
+        2
+      ],
+      [
+        0,
+        2,
+        0,
+        1,
+        0,
+        0,
+        1,
+        0,
+        2,
+        0,
+        0,
+        2
+      ],
+      [
+        0,
+        2,
+        1,
+        1,
+        0,
+        0,
+        1,
+        0,
+        2,
+        0,
+        0,
+        2
+      ],
+      [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ]
+    ],
+    "rule_severities": {
+      "bus_definition_conflict": "error",
+      "bus_entry_needed": "error",
+      "bus_to_bus_conflict": "error",
+      "bus_to_net_conflict": "error",
+      "different_unit_footprint": "error",
+      "different_unit_net": "error",
+      "duplicate_reference": "error",
+      "duplicate_sheet_names": "error",
+      "endpoint_off_grid": "warning",
+      "extra_units": "error",
+      "field_name_whitespace": "warning",
+      "footprint_filter": "ignore",
+      "footprint_link_issues": "warning",
+      "four_way_junction": "ignore",
+      "global_label_dangling": "warning",
+      "ground_pin_not_ground": "warning",
+      "hier_label_mismatch": "error",
+      "isolated_pin_label": "warning",
+      "label_dangling": "error",
+      "label_multiple_wires": "warning",
+      "lib_symbol_issues": "warning",
+      "lib_symbol_mismatch": "warning",
+      "missing_bidi_pin": "warning",
+      "missing_input_pin": "warning",
+      "missing_power_pin": "error",
+      "missing_unit": "warning",
+      "multiple_net_names": "warning",
+      "net_not_bus_member": "warning",
+      "no_connect_connected": "warning",
+      "no_connect_dangling": "warning",
+      "pin_not_connected": "error",
+      "pin_not_driven": "error",
+      "pin_to_pin": "error",
+      "power_pin_not_driven": "error",
+      "same_local_global_label": "warning",
+      "similar_label_and_power": "warning",
+      "similar_labels": "warning",
+      "similar_power": "warning",
+      "simulation_model_issue": "ignore",
+      "single_global_label": "ignore",
+      "stacked_pin_name": "warning",
+      "unannotated": "error",
+      "unconnected_wire_endpoint": "warning",
+      "undefined_netclass": "error",
+      "unit_value_mismatch": "error",
+      "unresolved_variable": "error",
+      "wire_dangling": "error"
+    }
+  },
+  "libraries": {
+    "pinned_footprint_libs": [],
+    "pinned_symbol_libs": []
+  },
+  "meta": {
+    "filename": "TM_MUX_Board_REV_B.kicad_pro",
+    "version": 3
+  },
+  "net_settings": {
+    "classes": [
+      {
+        "bus_width": 12,
+        "clearance": 0.2,
+        "diff_pair_gap": 0.25,
+        "diff_pair_via_gap": 0.25,
+        "diff_pair_width": 0.2,
+        "line_style": 0,
+        "microvia_diameter": 0.3,
+        "microvia_drill": 0.1,
+        "name": "Default",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "priority": 2147483647,
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "track_width": 0.3,
+        "tuning_profile": "",
+        "via_diameter": 0.6,
+        "via_drill": 0.25,
+        "wire_width": 6
+      },
+      {
+        "name": "power12V",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "priority": 0,
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "track_width": 0.6,
+        "tuning_profile": "",
+        "via_diameter": 0.8,
+        "via_drill": 0.3
+      }
+    ],
+    "meta": {
+      "version": 5
+    },
+    "net_colors": {
+      "+12V": "rgb(255, 14, 2)",
+      "+3.3V": "rgb(242, 124, 255)",
+      "+5V": "rgb(44, 255, 0)",
+      "-12V": "rgb(8, 14, 255)"
+    },
+    "netclass_assignments": null,
+    "netclass_patterns": [
+      {
+        "netclass": "power12V",
+        "pattern": "*12V*"
+      }
+    ]
+  },
+  "pcbnew": {
+    "last_paths": {
+      "gencad": "",
+      "idf": "",
+      "netlist": "",
+      "plot": "",
+      "pos_files": "",
+      "specctra_dsn": "",
+      "step": "TM_Mux_Board.step",
+      "svg": "",
+      "vrml": ""
+    },
+    "page_layout_descr_file": ""
+  },
+  "schematic": {
+    "annotate_start_num": 0,
+    "annotation": {
+      "method": 0,
+      "sort_order": 0
+    },
+    "bom_export_filename": "${PROJECTNAME}.csv",
+    "bom_fmt_presets": [],
+    "bom_fmt_settings": {
+      "field_delimiter": ",",
+      "keep_line_breaks": false,
+      "keep_tabs": false,
+      "name": "CSV",
+      "ref_delimiter": ",",
+      "ref_range_delimiter": "",
+      "string_delimiter": "\""
+    },
+    "bom_presets": [],
+    "bom_settings": {
+      "exclude_dnp": false,
+      "fields_ordered": [
+        {
+          "group_by": false,
+          "label": "Reference",
+          "name": "Reference",
+          "show": true
+        },
+        {
+          "group_by": false,
+          "label": "Qty",
+          "name": "${QUANTITY}",
+          "show": true
+        },
+        {
+          "group_by": true,
+          "label": "Value",
+          "name": "Value",
+          "show": true
+        },
+        {
+          "group_by": true,
+          "label": "DNP",
+          "name": "${DNP}",
+          "show": true
+        },
+        {
+          "group_by": true,
+          "label": "Exclude from BOM",
+          "name": "${EXCLUDE_FROM_BOM}",
+          "show": true
+        },
+        {
+          "group_by": true,
+          "label": "Exclude from Board",
+          "name": "${EXCLUDE_FROM_BOARD}",
+          "show": true
+        },
+        {
+          "group_by": true,
+          "label": "Footprint",
+          "name": "Footprint",
+          "show": true
+        },
+        {
+          "group_by": false,
+          "label": "Datasheet",
+          "name": "Datasheet",
+          "show": true
+        },
+        {
+          "group_by": false,
+          "label": "Manufacturer_Name",
+          "name": "Manufacturer_Name",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Manufacturer_Part_Number",
+          "name": "Manufacturer_Part_Number",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Mouser Part Number",
+          "name": "Mouser Part Number",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Mouser Price/Stock",
+          "name": "Mouser Price/Stock",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Height",
+          "name": "Height",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "Description",
+          "name": "Description",
+          "show": false
+        },
+        {
+          "group_by": false,
+          "label": "#",
+          "name": "${ITEM_NUMBER}",
+          "show": false
+        }
+      ],
+      "filter_string": "",
+      "group_symbols": true,
+      "include_excluded_from_bom": true,
+      "name": "",
+      "sort_asc": true,
+      "sort_field": "Reference"
+    },
+    "bus_aliases": {},
+    "connection_grid_size": 50.0,
+    "drawing": {
+      "dashed_lines_dash_length_ratio": 12.0,
+      "dashed_lines_gap_length_ratio": 3.0,
+      "default_line_thickness": 6.0,
+      "default_text_size": 50.0,
+      "field_names": [],
+      "hop_over_size_choice": 0,
+      "intersheets_ref_own_page": false,
+      "intersheets_ref_prefix": "",
+      "intersheets_ref_short": false,
+      "intersheets_ref_show": false,
+      "intersheets_ref_suffix": "",
+      "junction_size_choice": 3,
+      "label_size_ratio": 0.375,
+      "operating_point_overlay_i_precision": 3,
+      "operating_point_overlay_i_range": "~A",
+      "operating_point_overlay_v_precision": 3,
+      "operating_point_overlay_v_range": "~V",
+      "overbar_offset_ratio": 1.23,
+      "pin_symbol_size": 25.0,
+      "text_offset_ratio": 0.15
+    },
+    "legacy_lib_dir": "",
+    "legacy_lib_list": [],
+    "meta": {
+      "version": 1
+    },
+    "net_format_name": "",
+    "page_layout_descr_file": "",
+    "plot_directory": "",
+    "reuse_designators": true,
+    "space_save_all_events": true,
+    "spice_current_sheet_as_root": false,
+    "spice_external_command": "spice \"%I\"",
+    "spice_model_current_sheet_as_root": true,
+    "spice_save_all_currents": false,
+    "spice_save_all_dissipations": false,
+    "spice_save_all_voltages": false,
+    "subpart_first_id": 65,
+    "subpart_id_separator": 0,
+    "top_level_sheets": [
+      {
+        "filename": "TM_MUX_Board_REV_B.kicad_sch",
+        "name": "TM_MUX_Board_REV_B",
+        "uuid": "a28cd9e7-3152-411a-a36e-e3f099e362dd"
+      }
+    ],
+    "used_designators": "",
+    "variants": []
+  },
+  "sheets": [
+    [
+      "a28cd9e7-3152-411a-a36e-e3f099e362dd",
+      "TM_MUX_Board_REV_B"
+    ],
+    [
+      "27758359-ad44-4666-8619-b82f98e5419f",
+      "PGA_2"
+    ],
+    [
+      "7963ff5f-66a6-4d41-b845-7fcd556d7de9",
+      "MUX_1"
+    ],
+    [
+      "17e21302-7ccb-4219-a800-a0313cc9af97",
+      "BufferAmp 4"
+    ],
+    [
+      "812edc9d-3e6d-424a-b012-3666c43604ce",
+      "MCU"
+    ],
+    [
+      "22e1dd18-504e-4a38-a1cc-a6e9616bba6e",
+      "PGA_1"
+    ],
+    [
+      "feab54ad-2788-46d5-a14b-bdfb6b0d607e",
+      "SummingAOp"
+    ],
+    [
+      "f84fda83-6498-45e2-8665-7192acf12714",
+      "SubstractorAOp"
+    ],
+    [
+      "149d388d-06ea-424d-b2fd-78f6b7070bf4",
+      "PGA_3"
+    ],
+    [
+      "7f4ef653-eecd-44fb-859c-382358877de3",
+      "PGA_4"
+    ],
+    [
+      "f354053b-ee69-4b7d-b97c-c01840e2ee07",
+      "MUX_2"
+    ],
+    [
+      "88461cd4-e45e-4383-9054-aa24c62a50d6",
+      "MUX_3"
+    ],
+    [
+      "703df1b3-1013-4439-be97-8bb84d7760b5",
+      "MUX_4"
+    ],
+    [
+      "32e3db6e-25f8-42ba-8682-2458573d0db9",
+      "BufferAmp1"
+    ],
+    [
+      "e6abf697-b2ce-440a-8200-7ba753780c54",
+      "BufferAmp2"
+    ],
+    [
+      "ffbd570e-3412-44a0-bd9c-05f25812cdc8",
+      "BufferAmp3"
+    ],
+    [
+      "7f684e91-5783-4f5c-86a8-1d0ec712e024",
+      "alimentation"
+    ]
+  ],
+  "text_variables": {},
+  "tuning_profiles": {
+    "meta": {
+      "version": 0
+    },
+    "tuning_profiles_impedance_geometric": []
+  }
+}

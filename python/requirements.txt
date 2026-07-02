@@ -1,0 +1,14 @@
+# Python 3.10+ (developed on 3.13)
+# Client library, CLI and plotting
+numpy
+scipy
+pandas
+matplotlib
+
+# Desktop GUI (afm_gui.py)
+PyQt6
+pyqtgraph
+
+# Deployment / file transfer over SSH (rp_deploy.py, import_csv_files.py)
+paramiko
+scp

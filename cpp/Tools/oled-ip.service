@@ -1,0 +1,20 @@
+[Unit]
+Description=Display IP address on SSD1306 OLED
+# Run after the network interfaces are up and have an address
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Give the I2C bus and display hardware time to fully initialize after power-on
+ExecStartPre=/bin/sleep 5
+# --persist keeps the process alive, refreshing the display every 30s to prevent
+# the SSD1306 charge pump from draining and blanking the screen
+ExecStart=/root/master/tm/cpp/out/oled_ip --retry 15 --persist --refresh 30
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
