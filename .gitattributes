@@ -1,0 +1,2 @@
+# exclude from GitHub language statistics, it's not hand-written source.
+hardware/TM_MUX_Board_REV_B/bom/ibom.html linguist-generated=true
