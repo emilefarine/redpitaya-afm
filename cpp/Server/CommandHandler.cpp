@@ -16,11 +16,20 @@
 #include <sstream>
 #include <thread>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 namespace AFM
 {
 
-CommandHandler::CommandHandler()
-    : m_hardware(nullptr)
+CommandHandler::CommandHandler(HardwareFactory hardwareFactory,
+                               BoardFactory boardFactory,
+                               int measurementTimeoutMs)
+    : m_hardwareFactory(std::move(hardwareFactory))
+    , m_boardFactory(std::move(boardFactory))
+    , m_measurementTimeoutMs(measurementTimeoutMs)
+    , m_hardware(nullptr)
     , m_board(nullptr)
     , m_signalGen(nullptr)
     , m_fftProcessor(nullptr)
@@ -174,16 +183,16 @@ std::string CommandHandler::_handleSystInit(const ParsedCommand& cmd)
   }
 
   // Initialize Red Pitaya hardware
-  m_hardware = std::make_unique<RedPitayaHardware>();
-  if (!m_hardware->initialize())
+  m_hardware = m_hardwareFactory();
+  if (!m_hardware || !m_hardware->initialize())
   {
     m_hardware.reset();
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to initialize Red Pitaya");
   }
 
   // Initialize electronic board
-  m_board = std::make_unique<ElectronicBoardUART>();
-  if (!m_board->initialize())
+  m_board = m_boardFactory();
+  if (!m_board || !m_board->initialize())
   {
     std::cout << "[CommandHandler] Warning: Electronic board not connected" << std::endl;
     m_status.boardConnected = false;
@@ -257,12 +266,12 @@ std::string CommandHandler::_handleBoardMuxRoute(const ParsedCommand& cmd)
   }
 
   // Accept 1-based channel numbers matching board connector labels (1-4)
-  if (output < 1 || output > ElectronicBoardUART::NUM_CHANNELS || input < 1 ||
-      input > ElectronicBoardUART::NUM_CHANNELS)
+  if (output < 1 || output > IElectronicBoard::NUM_CHANNELS || input < 1 ||
+      input > IElectronicBoard::NUM_CHANNELS)
   {
     return buildErrorResponse(ResponseStatus::ERR_PARAM,
                               "out and in must be 1-" +
-                                  std::to_string(ElectronicBoardUART::NUM_CHANNELS));
+                                  std::to_string(IElectronicBoard::NUM_CHANNELS));
   }
 
   // Convert to 0-indexed for internal use
@@ -291,11 +300,11 @@ std::string CommandHandler::_handleBoardMuxDisconnect(const ParsedCommand& cmd)
   }
 
   // Accept 1-based channel number matching board connector label (1-4)
-  if (output < 1 || output > ElectronicBoardUART::NUM_CHANNELS)
+  if (output < 1 || output > IElectronicBoard::NUM_CHANNELS)
   {
     return buildErrorResponse(ResponseStatus::ERR_PARAM,
                               "out must be 1-" +
-                                  std::to_string(ElectronicBoardUART::NUM_CHANNELS));
+                                  std::to_string(IElectronicBoard::NUM_CHANNELS));
   }
 
   // Convert to 0-indexed for internal use
@@ -324,11 +333,11 @@ std::string CommandHandler::_handleBoardGain(const ParsedCommand& cmd)
   }
 
   // Accept 1-based channel number matching board connector label (1-4)
-  if (channel < 1 || channel > ElectronicBoardUART::NUM_CHANNELS)
+  if (channel < 1 || channel > IElectronicBoard::NUM_CHANNELS)
   {
     return buildErrorResponse(ResponseStatus::ERR_PARAM,
                               "channel must be 1-" +
-                                  std::to_string(ElectronicBoardUART::NUM_CHANNELS));
+                                  std::to_string(IElectronicBoard::NUM_CHANNELS));
   }
 
   if (gainIndex < 0 || gainIndex > 7)
@@ -343,7 +352,7 @@ std::string CommandHandler::_handleBoardGain(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, m_board->getLastError());
   }
 
-  return buildOkResponse(ElectronicBoardUART::gainToString(gain));
+  return buildOkResponse(IElectronicBoard::gainToString(gain));
 }
 
 std::string CommandHandler::_handleBoardReset(const ParsedCommand& cmd)
@@ -876,11 +885,11 @@ bool CommandHandler::_checkInitialized(std::string& errorResponse)
 
 bool CommandHandler::_validateSampleCount(int numSamples, std::string& errorResponse)
 {
-  if (numSamples <= 0 || numSamples > static_cast<int>(RedPitayaHardware::MAX_SAMPLES))
+  if (numSamples <= 0 || numSamples > static_cast<int>(IRedPitayaHardware::MAX_SAMPLES))
   {
     errorResponse = buildErrorResponse(ResponseStatus::ERR_PARAM,
                                        "num_samples must be 1-" +
-                                           std::to_string(RedPitayaHardware::MAX_SAMPLES));
+                                           std::to_string(IRedPitayaHardware::MAX_SAMPLES));
     return false;
   }
   return true;
@@ -904,13 +913,14 @@ bool CommandHandler::_validateDecimation(int decimation, std::string& errorRespo
   return true;
 }
 
-bool CommandHandler::_waitForMeasurement(int timeoutMs)
+bool CommandHandler::_waitForMeasurement()
 {
   auto start = std::chrono::steady_clock::now();
   while (!m_hardware->isMeasurementComplete())
   {
     auto elapsed = std::chrono::steady_clock::now() - start;
-    if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() >= timeoutMs)
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() >=
+        m_measurementTimeoutMs)
     {
       return false;
     }
