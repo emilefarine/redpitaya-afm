@@ -36,13 +36,15 @@ SERVER_PRG = afm_server
 TOOL_PRGS = oled_ip
 
 # ---------------------------------------------------------------------------
-# Host-side unit tests (Windows dev machine, MSYS2 UCRT64 toolchain)
+# Host-side unit tests (dev machine, POSIX-like shell)
 # These targets are NOT used on the Red Pitaya.
 # Prerequisites:
-#   MSYS2 UCRT64 shell: pacman -S mingw-w64-ucrt-x86_64-gtest \
-#                       mingw-w64-ucrt-x86_64-fftw
-#   Windows:            pip install gcovr
-# Run from cpp/ in PowerShell or cmd:  make test_host / make coverage
+#   Windows MSYS2 UCRT64 shell: pacman -S mingw-w64-ucrt-x86_64-gtest \
+#                               mingw-w64-ucrt-x86_64-fftw
+#   Linux: apt install libgtest-dev libgmock-dev libfftw3-dev
+#   Anywhere: pip install gcovr
+# Run from cpp/ in the MSYS2 UCRT64 shell (Windows) or any POSIX shell:
+#   make test_host / make coverage
 # ---------------------------------------------------------------------------
 
 UNITTEST_DIR    = tests/unit
@@ -119,14 +121,14 @@ afm_server: $(OUT_DIR) $(SERVER_DIR)/ServerMain.cpp $(SERVER_OBJS) $(SIGNAL_PROC
 oled_ip: $(OUT_DIR) $(TOOLS_DIR)/oled_ip.cpp $(OLED_OBJS)
 	$(CXX) $(TOOLS_DIR)/oled_ip.cpp $(OLED_OBJS) $(CXXFLAGS) -o $(OUT_DIR)/$@
 
-# Host-side Unit Tests (Windows, MSYS2 UCRT64)
-# --------------------------------------------
+# Host-side Unit Tests (any POSIX-like shell: MSYS2 UCRT64, Linux, WSL, macOS)
+# ---------------------------------------------------------------------------
 
 $(HOST_OBJ_DIR):
-	if not exist "$(subst /,\,$(HOST_OBJ_DIR))" mkdir "$(subst /,\,$(HOST_OBJ_DIR))"
+	mkdir -p $(HOST_OBJ_DIR)
 
 $(HOST_BUILD_DIR):
-	if not exist "$(subst /,\,$(HOST_BUILD_DIR))" mkdir "$(subst /,\,$(HOST_BUILD_DIR))"
+	mkdir -p $(HOST_BUILD_DIR)
 
 $(HOST_OBJ_DIR)/%.o: $(SIGNAL_DIR)/%.cpp | $(HOST_OBJ_DIR)
 	$(HOST_CXX) -c $< $(HOST_CXXFLAGS) -o $@
@@ -143,16 +145,15 @@ test_host: $(HOST_UNITTEST)
 
 # Run host unit tests and generate HTML coverage report
 coverage: $(HOST_UNITTEST)
-	del /q "$(subst /,\,$(HOST_OBJ_DIR))\*.gcda" 2>nul
-	del /q "$(subst /,\,$(HOST_BUILD_DIR))\*.gcda" 2>nul
+	$(RM) $(HOST_OBJ_DIR)/*.gcda $(HOST_BUILD_DIR)/*.gcda
 	$(HOST_UNITTEST)
-	if not exist "$(subst /,\,$(HOST_COV_DIR))" mkdir "$(subst /,\,$(HOST_COV_DIR))"
+	mkdir -p $(HOST_COV_DIR)
 	gcovr --root . --filter $(SIGNAL_DIR)/ --filter Server/ --filter Hardware/DacCodec.h \
 	      --print-summary --html-details $(HOST_COV_DIR)/index.html
 
 # Remove host test build artifacts (objects, coverage data, reports)
 clean_host:
-	if exist "$(subst /,\,$(HOST_BUILD_DIR))" rmdir /s /q "$(subst /,\,$(HOST_BUILD_DIR))"
+	rm -rf $(HOST_BUILD_DIR)
 
 
 # Clean object files
@@ -178,7 +179,7 @@ help:
 	@echo "  all                       - Build server and tools (default)"
 	@echo "  server                    - Build AFM server"
 	@echo "  tools                     - Build tool programs (oled_ip)"
-	@echo "  test_host                 - Run host unit tests (Windows, no RedPitaya needed)"
+	@echo "  test_host                 - Run host unit tests (no RedPitaya needed)"
 	@echo "  coverage                  - Host unit tests + HTML coverage report"
 	@echo "                              (out/host/coverage/index.html)"
 	@echo "  clean                     - Remove object files"

@@ -17,15 +17,22 @@ concurrency:
 
 jobs:
   unit-tests:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: windows-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           persist-credentials: false
 
-      - name: Setup MSYS2 UCRT64
+      - name: Setup MSYS2 UCRT64 (Windows)
         id: msys2
+        if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -34,40 +41,57 @@ jobs:
             mingw-w64-ucrt-x86_64-toolchain
             mingw-w64-ucrt-x86_64-gtest
             mingw-w64-ucrt-x86_64-fftw
-            mingw-w64-ucrt-x86_64-make
+            make
 
-      - name: Run host unit tests
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ libgtest-dev libgmock-dev libfftw3-dev gcovr
+
+      - name: Install gcovr (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pip install gcovr
+
+      - name: Run host unit tests (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd cpp
+          make test_host
+
+      - name: Run host unit tests (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
         env:
-          MSYS2_UCRT64_BIN: ${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin
+          MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
         run: |
-          # The Makefile host-test recipes use cmd syntax. GNU make on
-          # Windows only falls back to cmd.exe when no sh.exe is on PATH.
-          # The runner PATH includes Git for Windows usr\bin (sh.exe), so
-          # drop every PATH entry that provides a sh.exe.
-          $noShDirs = ($env:Path -split ';') | Where-Object {
-            $_ -and -not (Test-Path (Join-Path $_ 'sh.exe'))
-          }
-          $env:Path = "$env:MSYS2_UCRT64_BIN;" + ($noShDirs -join ';')
+          # Prepend usr\bin (msys make + sh execute the POSIX recipes) and
+          # ucrt64\bin (g++, gcov, gtest, fftw libs). gcovr resolves via the
+          # Windows Python already on PATH.
+          $env:Path = "$env:MSYS2_ROOT\usr\bin;$env:MSYS2_ROOT\ucrt64\bin;" + $env:Path
           Set-Location cpp
-          mingw32-make test_host
+          make test_host
 
-      - name: Coverage report
+      - name: Coverage report (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd cpp
+          make coverage
+
+      - name: Coverage report (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
         env:
-          MSYS2_UCRT64_BIN: ${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin
+          MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
         run: |
-          $noShDirs = ($env:Path -split ';') | Where-Object {
-            $_ -and -not (Test-Path (Join-Path $_ 'sh.exe'))
-          }
-          $env:Path = "$env:MSYS2_UCRT64_BIN;" + ($noShDirs -join ';')
-          pip install gcovr
+          $env:Path = "$env:MSYS2_ROOT\usr\bin;$env:MSYS2_ROOT\ucrt64\bin;" + $env:Path
           Set-Location cpp
-          mingw32-make coverage
+          make coverage
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
+          name: coverage-report-${{ matrix.os }}
           path: cpp/out/host/coverage/
           if-no-files-found: error
