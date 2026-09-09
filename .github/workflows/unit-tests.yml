@@ -1,0 +1,73 @@
+name: C++ unit tests
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "cpp/**"
+      - ".github/workflows/unit-tests.yml"
+  pull_request:
+    paths:
+      - "cpp/**"
+      - ".github/workflows/unit-tests.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup MSYS2 UCRT64
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-gtest
+            mingw-w64-ucrt-x86_64-fftw
+            mingw-w64-ucrt-x86_64-make
+
+      - name: Run host unit tests
+        shell: pwsh
+        env:
+          MSYS2_UCRT64_BIN: ${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin
+        run: |
+          # The Makefile host-test recipes use cmd syntax. GNU make on
+          # Windows only falls back to cmd.exe when no sh.exe is on PATH.
+          # The runner PATH includes Git for Windows usr\bin (sh.exe), so
+          # drop every PATH entry that provides a sh.exe.
+          $noShDirs = ($env:Path -split ';') | Where-Object {
+            $_ -and -not (Test-Path (Join-Path $_ 'sh.exe'))
+          }
+          $env:Path = "$env:MSYS2_UCRT64_BIN;" + ($noShDirs -join ';')
+          Set-Location cpp
+          mingw32-make test_host
+
+      - name: Coverage report
+        shell: pwsh
+        env:
+          MSYS2_UCRT64_BIN: ${{ steps.msys2.outputs.msys2-location }}\ucrt64\bin
+        run: |
+          $noShDirs = ($env:Path -split ';') | Where-Object {
+            $_ -and -not (Test-Path (Join-Path $_ 'sh.exe'))
+          }
+          $env:Path = "$env:MSYS2_UCRT64_BIN;" + ($noShDirs -join ';')
+          pip install gcovr
+          Set-Location cpp
+          mingw32-make coverage
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: cpp/out/host/coverage/
+          if-no-files-found: error
