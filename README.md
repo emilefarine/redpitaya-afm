@@ -33,7 +33,6 @@ cpp/                 Embedded C++ server + signal processing (build & run on the
   Hardware/          Hardware abstraction: FPGA register access, board UART, SSD1306 OLED
   Server/            TCP server, SCPI command handler, protocol
   SignalProcessing/  Signal generation, FFT (FFTW3), resonance analysis
-  Test/              Standalone hardware and DSP validation programs
   Tools/             oled-ip helper + systemd service
   tests/             Host-side unit tests (run on the dev PC, no Red Pitaya needed)
 python/              Client library, CLI, GUI (with routing schematic dialog) and deployment
@@ -51,7 +50,6 @@ hardware/
 ### Hardware
 - Red Pitaya STEMlab 125-14 (Zynq-7010)
 - Custom analog MUX board (design in [`hardware/`](hardware/))
-- For the DAC->ADC loopback tests: a cable from OUT1 to IN1
 
 ### Software
 - **Client PC:** Python **3.10+** (developed on 3.13)
@@ -106,8 +104,7 @@ make server        # build the AFM SCPI server
 ./out/afm_server   # run it (listens on TCP 5025)
 ```
 
-Other `make` targets: `make all` (production programs), `make tests` (hardware/DSP test
-programs), `make tools`. See the individual `Test/` programs for loopback and validation.
+Other `make` targets: `make all` (server + tools), `make tools`.
 
 Host-side unit tests run on the dev PC without a Red Pitaya (MSYS2 UCRT64 with
 `mingw-w64-ucrt-x86_64-gtest` and `mingw-w64-ucrt-x86_64-fftw`, plus `gcovr` for coverage).
