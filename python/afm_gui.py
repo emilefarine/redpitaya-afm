@@ -17,6 +17,7 @@ from afm_client import (
     AFMClient, AFMError, AFMConnectionError, AFMCommandError, AFMTimeoutError,
     GainSetting, SpectrumData,
 )
+from afm_schematic import RoutingSchematicDialog
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +424,10 @@ class AFMMainWindow(QMainWindow):
         board_btns.addWidget(self.board_reset_btn)
         layout.addLayout(board_btns, 7, 0, 1, 2)
 
+        self.schematic_btn = QPushButton("Open Routing Schematic")
+        self.schematic_btn.clicked.connect(self._on_open_schematic)
+        layout.addWidget(self.schematic_btn, 8, 0, 1, 2)
+
         return grp
 
     # --- Measurement panel ---
@@ -677,7 +682,7 @@ class AFMMainWindow(QMainWindow):
 
         # Enable/disable control panels
         for btn in [self.init_hw_btn, self.mux_set_btn, self.mux_disc_btn, self.gain_set_btn,
-                     self.board_status_btn, self.board_reset_btn,
+                     self.board_status_btn, self.board_reset_btn, self.schematic_btn,
                      self.measure_btn, self.refresh_status_btn]:
             btn.setEnabled(connected)
 
@@ -744,6 +749,15 @@ class AFMMainWindow(QMainWindow):
             QMessageBox.information(self, "Board Status", result)
         except AFMError as exc:
             self.statusBar().showMessage(f"Board status error: {exc}")
+
+    def _on_open_schematic(self):
+        dlg = getattr(self, "_schematic_dialog", None)
+        if dlg is not None and dlg.isVisible():
+            dlg.raise_()
+            dlg.activateWindow()
+            return
+        self._schematic_dialog = RoutingSchematicDialog(self.client, parent=self)
+        self._schematic_dialog.show()
 
     def _on_board_reset(self):
         reply = QMessageBox.question(
@@ -949,12 +963,20 @@ class AFMMainWindow(QMainWindow):
             else:
                 phase_deg = _wrap_deg(phase_compensated)
         else:
-            if self.unwrap_phase_sweep_check.isChecked():
-                # Sweep default: preserve phase continuity across frequency.
-                phase_deg = np.degrees(np.unwrap(phase_rad))
-            else:
+            # Sweep lock-in phase contains the acquisition path delay
+            # (DAC -> board -> ADC -> decimator) as a linear-in-frequency
+            # term that hides the resonance signature. Remove it the same
+            # way as the sinc branch: wrap, unwrap, fit the global linear
+            # slope, subtract it anchored at the resonance peak.
+            phase_deg = _wrap_deg(np.degrees(phase_rad))
+            if phase_deg.size > 1:
+                phase_deg = np.degrees(np.unwrap(np.deg2rad(phase_deg)))
+                peak_idx = self._find_peak_index(mag_raw)
+                f0 = freq_khz[peak_idx]
+                slope, _ = np.polyfit(freq_khz, phase_deg, 1)
+                phase_deg = phase_deg - slope * (freq_khz - f0)
+            if not self.unwrap_phase_sweep_check.isChecked():
                 # Optional wrapped sweep display.
-                phase_deg = np.degrees(phase_rad)
                 phase_deg = _wrap_deg(phase_deg)
 
         max_freq_khz = float(np.max(np.abs(freq_khz))) if freq_khz.size else 0.0
