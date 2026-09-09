@@ -106,9 +106,10 @@ make server        # build the AFM SCPI server
 
 Other `make` targets: `make all` (server + tools), `make tools`.
 
-Host-side unit tests run on the dev PC without a Red Pitaya (MSYS2 UCRT64 with
-`mingw-w64-ucrt-x86_64-gtest` and `mingw-w64-ucrt-x86_64-fftw`, plus `gcovr` for coverage).
-From `cpp/` in PowerShell or cmd:
+Host-side unit tests run on the dev PC without a Red Pitaya. Shell: the MSYS2 UCRT64
+shell on Windows (install `mingw-w64-ucrt-x86_64-gtest` and `mingw-w64-ucrt-x86_64-fftw`
+via pacman) or any POSIX shell on Linux (`apt install libgtest-dev libgmock-dev
+libfftw3-dev`), plus `pip install gcovr` for coverage. From `cpp/`:
 
 ```bash
 make test_host      # build and run the unit tests
