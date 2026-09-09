@@ -21,7 +21,7 @@ The system is organised in four layers:
 | **FPGA datapath** | Custom programmable-logic design on the Zynq: excitation generation and acquisition around a single shared BRAM, with adaptive decimation | [`fpga/`](fpga/) |
 | **Analog board** | Custom conditioning board: programmable gain (×1/8 to ×16), input multiplexer, ±10 V range, analog sum/difference outputs, LPC1114 control microcontroller, OLED IP display | [`hardware/`](hardware/), [`ElectronicBoard/`](ElectronicBoard/) |
 | **Embedded C++ server** | Single-client TCP server running on the Red Pitaya's Linux, exposing an SCPI-inspired command language over the network | [`cpp/`](cpp/) |
-| **Python clients** | Client library, interactive CLI, PyQt6 desktop GUI, deployment tooling and plotting scripts | [`python/`](python/) |
+| **Python clients** | Client library, interactive CLI, PyQt6 desktop GUI with routing schematic dialog, and deployment tooling | [`python/`](python/) |
 
 Two measurement modes are available: a **broadband sinc** that captures a whole spectrum in a
 few milliseconds, and a **lock-in sweep** that resolves narrow resonances.
@@ -32,10 +32,11 @@ few milliseconds, and a **lock-in sweep** that resolves narrow resonances.
 cpp/                 Embedded C++ server + signal processing (build & run on the Red Pitaya)
   Hardware/          Hardware abstraction: FPGA register access, board UART, SSD1306 OLED
   Server/            TCP server, SCPI command handler, protocol
-  SignalProcessing/  Signal generation, FFT (FFTW3), resonance/calibration analysis
+  SignalProcessing/  Signal generation, FFT (FFTW3), resonance analysis
   Test/              Standalone hardware and DSP validation programs
   Tools/             oled-ip helper + systemd service
-python/              Client library, CLI, GUI and deployment
+  tests/             Host-side unit tests (run on the dev PC, no Red Pitaya needed)
+python/              Client library, CLI, GUI (with routing schematic dialog) and deployment
 fpga/
   rtl/               SystemVerilog / VHDL sources for the custom datapath
   bitfiles/          Prebuilt bitstream (flash without rebuilding in Vivado)
@@ -102,11 +103,20 @@ python python/rp_deploy.py --host 192.168.1.100 --cpp      # sync sources to the
 
 # then over SSH on the Red Pitaya, from the synced cpp/ directory:
 make server        # build the AFM SCPI server
-./afm_server       # run it (listens on TCP 5025)
+./out/afm_server   # run it (listens on TCP 5025)
 ```
 
 Other `make` targets: `make all` (production programs), `make tests` (hardware/DSP test
 programs), `make tools`. See the individual `Test/` programs for loopback and validation.
+
+Host-side unit tests run on the dev PC without a Red Pitaya (MSYS2 UCRT64 with
+`mingw-w64-ucrt-x86_64-gtest` and `mingw-w64-ucrt-x86_64-fftw`, plus `gcovr` for coverage).
+From `cpp/` in PowerShell or cmd:
+
+```bash
+make test_host      # build and run the unit tests
+make coverage       # unit tests + HTML report at out/host/coverage/index.html
+```
 
 ### 3. Connect a client
 
@@ -120,6 +130,14 @@ Desktop GUI (PyQt6, real-time magnitude/phase plots):
 
 ```bash
 python python/afm_gui.py
+```
+
+The GUI has an "Open Routing Schematic" button showing the live 4x4 crossbar
+routing and PGA gains (read from `BOARD:STATUS?`); the same dialog runs
+standalone without hardware for preview:
+
+```bash
+python python/afm_schematic.py
 ```
 
 Python library:
@@ -146,8 +164,11 @@ every line ends with `\n`. Responses are a single line: `OK [data]` or `ERR_<COD
 |---------|-------------|
 | `*IDN?` / `*RST` / `*OPC?` | IEEE 488.2 common commands |
 | `SYSTEM:INIT` / `SYSTEM:DEINIT` / `SYSTEM:STATUS?` | Hardware lifecycle and status |
+| `SYSTEM:PING` / `SYSTEM:VERSION?` / `SYSTEM:SHUTDOWN` | Connectivity check, server version, server shutdown |
 | `BOARD:MUX:ROUTE <out>,<in>` | Route input to output (channels 1-4) |
+| `BOARD:MUX:DISCONNECT <out>` | Disconnect a multiplexer output |
 | `BOARD:GAIN <ch>,<idx>` | Set programmable gain (idx 0-7 → ×1/8 … ×16) |
+| `BOARD:STATUS?` / `BOARD:RESET` | Query board routing/gains, reset board to defaults |
 | `MEASURE:SINC <center_kHz>,<bw_kHz>[,<samples>,<dec>,<amp>]` | Broadband sinc + FFT |
 | `MEASURE:SWEEP <center_kHz>,<range_kHz>[,<step_kHz>,<dec>,<amp>]` | Lock-in frequency sweep |
 
