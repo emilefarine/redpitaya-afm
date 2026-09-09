@@ -53,10 +53,7 @@ struct ServerConfig
     X(BOARD_RESET,          "BOARD:RESET")            /* Reset electronic board */ \
     X(BOARD_STATUS,         "BOARD:STATUS")           /* Get electronic board status */ \
     X(MEAS_SINC,            "MEASURE:SINC")           /* Broadband sinc measurement + FFT */ \
-    X(MEAS_SWEEP,           "MEASURE:SWEEP")          /* Frequency sweep measurement */ \
-    X(CAL_RUN,              "CALIBRATE:RUN")           /* Run loopback calibration */   \
-    X(CAL_STATUS,           "CALIBRATE:STATUS")        /* Query calibration state */    \
-    X(CAL_CLEAR,            "CALIBRATE:CLEAR")         /* Clear stored calibration */
+    X(MEAS_SWEEP,           "MEASURE:SWEEP")          /* Frequency sweep measurement */
 // clang-format on
 
 /**

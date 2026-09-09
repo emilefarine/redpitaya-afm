@@ -16,11 +16,20 @@
 #include <sstream>
 #include <thread>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 namespace AFM
 {
 
-CommandHandler::CommandHandler()
-    : m_hardware(nullptr)
+CommandHandler::CommandHandler(HardwareFactory hardwareFactory,
+                               BoardFactory boardFactory,
+                               int measurementTimeoutMs)
+    : m_hardwareFactory(std::move(hardwareFactory))
+    , m_boardFactory(std::move(boardFactory))
+    , m_measurementTimeoutMs(measurementTimeoutMs)
+    , m_hardware(nullptr)
     , m_board(nullptr)
     , m_signalGen(nullptr)
     , m_fftProcessor(nullptr)
@@ -82,14 +91,6 @@ std::string CommandHandler::handleCommand(const ParsedCommand& cmd)
   case Command::MEAS_SWEEP:
     return _handleMeasSweep(cmd);
 
-  // CALIBRATE subsystem
-  case Command::CAL_RUN:
-    return _handleCalRun(cmd);
-  case Command::CAL_STATUS:
-    return _handleCalStatus(cmd);
-  case Command::CAL_CLEAR:
-    return _handleCalClear(cmd);
-
   // Shutdown handled in TCPServer, unknown commands
   case Command::SYST_SHUTDOWN:
   case Command::UNKNOWN:
@@ -123,7 +124,6 @@ std::string CommandHandler::_handleRst(const ParsedCommand& cmd)
   m_signalGen.reset();
   m_fftProcessor.reset();
   m_resonanceAnalyzer.reset();
-  m_calibration.reset();
   m_status = SystemStatus();
   return buildOkResponse();
 }
@@ -158,7 +158,6 @@ std::string CommandHandler::_handleSystStatus(const ParsedCommand& cmd)
   oss << "HW_INIT=" << (m_status.hardwareInitialized ? "1" : "0")
       << " BOARD=" << (m_status.boardConnected ? "1" : "0")
       << " BUSY=" << (m_status.measurementInProgress ? "1" : "0")
-      << " CAL=" << (m_status.calibrationActive ? "1" : "0")
       << " DEC=" << m_status.currentDecimation;
 
   return buildOkResponse(oss.str());
@@ -174,16 +173,16 @@ std::string CommandHandler::_handleSystInit(const ParsedCommand& cmd)
   }
 
   // Initialize Red Pitaya hardware
-  m_hardware = std::make_unique<RedPitayaHardware>();
-  if (!m_hardware->initialize())
+  m_hardware = m_hardwareFactory();
+  if (!m_hardware || !m_hardware->initialize())
   {
     m_hardware.reset();
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to initialize Red Pitaya");
   }
 
   // Initialize electronic board
-  m_board = std::make_unique<ElectronicBoardUART>();
-  if (!m_board->initialize())
+  m_board = m_boardFactory();
+  if (!m_board || !m_board->initialize())
   {
     std::cout << "[CommandHandler] Warning: Electronic board not connected" << std::endl;
     m_status.boardConnected = false;
@@ -197,9 +196,6 @@ std::string CommandHandler::_handleSystInit(const ParsedCommand& cmd)
   m_status.currentDecimation = m_hardware->getDecimation();
   double samplingFreq = 125000000.0 / m_status.currentDecimation;
   m_signalGen = std::make_unique<SignalGenerator>(samplingFreq, m_status.currentDecimation);
-
-  // Initialize calibration manager
-  m_calibration = std::make_unique<CalibrationManager>();
 
   m_status.hardwareInitialized = true;
 
@@ -230,10 +226,8 @@ std::string CommandHandler::_handleSystDeinit(const ParsedCommand& cmd)
   }
 
   m_signalGen.reset();
-  m_calibration.reset();
   m_status.hardwareInitialized = false;
   m_status.boardConnected = false;
-  m_status.calibrationActive = false;
 
   return buildOkResponse("Hardware deinitialized");
 }
@@ -257,12 +251,12 @@ std::string CommandHandler::_handleBoardMuxRoute(const ParsedCommand& cmd)
   }
 
   // Accept 1-based channel numbers matching board connector labels (1-4)
-  if (output < 1 || output > ElectronicBoardUART::NUM_CHANNELS || input < 1 ||
-      input > ElectronicBoardUART::NUM_CHANNELS)
+  if (output < 1 || output > IElectronicBoard::NUM_CHANNELS || input < 1 ||
+      input > IElectronicBoard::NUM_CHANNELS)
   {
     return buildErrorResponse(ResponseStatus::ERR_PARAM,
                               "out and in must be 1-" +
-                                  std::to_string(ElectronicBoardUART::NUM_CHANNELS));
+                                  std::to_string(IElectronicBoard::NUM_CHANNELS));
   }
 
   // Convert to 0-indexed for internal use
@@ -291,11 +285,11 @@ std::string CommandHandler::_handleBoardMuxDisconnect(const ParsedCommand& cmd)
   }
 
   // Accept 1-based channel number matching board connector label (1-4)
-  if (output < 1 || output > ElectronicBoardUART::NUM_CHANNELS)
+  if (output < 1 || output > IElectronicBoard::NUM_CHANNELS)
   {
     return buildErrorResponse(ResponseStatus::ERR_PARAM,
                               "out must be 1-" +
-                                  std::to_string(ElectronicBoardUART::NUM_CHANNELS));
+                                  std::to_string(IElectronicBoard::NUM_CHANNELS));
   }
 
   // Convert to 0-indexed for internal use
@@ -324,11 +318,11 @@ std::string CommandHandler::_handleBoardGain(const ParsedCommand& cmd)
   }
 
   // Accept 1-based channel number matching board connector label (1-4)
-  if (channel < 1 || channel > ElectronicBoardUART::NUM_CHANNELS)
+  if (channel < 1 || channel > IElectronicBoard::NUM_CHANNELS)
   {
     return buildErrorResponse(ResponseStatus::ERR_PARAM,
                               "channel must be 1-" +
-                                  std::to_string(ElectronicBoardUART::NUM_CHANNELS));
+                                  std::to_string(IElectronicBoard::NUM_CHANNELS));
   }
 
   if (gainIndex < 0 || gainIndex > 7)
@@ -343,7 +337,7 @@ std::string CommandHandler::_handleBoardGain(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, m_board->getLastError());
   }
 
-  return buildOkResponse(ElectronicBoardUART::gainToString(gain));
+  return buildOkResponse(IElectronicBoard::gainToString(gain));
 }
 
 std::string CommandHandler::_handleBoardReset(const ParsedCommand& cmd)
@@ -514,45 +508,6 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_PARAM, "No frequency bins in specified range");
   }
 
-  // Apply calibration if available and valid
-  if (m_calibration && m_calibration->isCalibrated())
-  {
-    CalibrationParams currentParams;
-    currentParams.decimation = dec;
-    currentParams.numSamples = static_cast<uint32_t>(numSamples);
-    currentParams.centerKHz = centerKHz;
-    currentParams.bandwidthKHz = bandwidthKHz;
-    currentParams.amplitude = amplitude;
-
-    if (m_calibration->isValidFor(currentParams))
-    {
-      std::vector<float> freqs, mags, phases;
-      freqs.reserve(spectrum.size());
-      mags.reserve(spectrum.size());
-      phases.reserve(spectrum.size());
-
-      for (const auto& pt : spectrum)
-      {
-        freqs.push_back(pt.freqKHz);
-        mags.push_back(pt.magnitude);
-        phases.push_back(pt.phaseRad);
-      }
-
-      m_calibration->applyCalibration(mags, phases, freqs);
-
-      for (size_t i = 0; i < spectrum.size(); ++i)
-      {
-        spectrum[i].magnitude = mags[i];
-        spectrum[i].phaseRad = phases[i];
-      }
-    }
-    else
-    {
-      std::cout << "[CommandHandler] Warning: Calibration parameters mismatch, "
-                << "skipping calibration. Re-calibrate with matching settings." << std::endl;
-    }
-  }
-
   return buildSpectrumResponse(spectrum);
 }
 
@@ -685,179 +640,6 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
   return buildSpectrumResponse(spectrum);
 }
 
-// ---- CALIBRATE subsystem ----
-
-std::string CommandHandler::_handleCalRun(const ParsedCommand& cmd)
-{
-  std::string error;
-  if (!_checkInitialized(error))
-  {
-    return error;
-  }
-
-  // Parse arguments: CALIBRATE:RUN
-  // <center_kHz>,<bandwidth_kHz>[,<num_samples>,<decimation>,<amplitude>]
-  float centerKHz, bandwidthKHz;
-  if (!cmd.getArgFloat(0, centerKHz) || !cmd.getArgFloat(1, bandwidthKHz))
-  {
-    return buildErrorResponse(
-        ResponseStatus::ERR_SYNTAX,
-        "Usage: CALIBRATE:RUN "
-        "<center_kHz>,<bandwidth_kHz>[,<num_samples>,<decimation>,<amplitude>]");
-  }
-
-  // Optional parameters with defaults
-  int numSamples = 8192;
-  int decimation = 64;
-  float amplitude = 1.0f;
-
-  cmd.getArgInt(2, numSamples);
-  cmd.getArgInt(3, decimation);
-  cmd.getArgFloat(4, amplitude);
-
-  if (!_validateSampleCount(numSamples, error))
-    return error;
-  if (!_validateDecimation(decimation, error))
-    return error;
-  if (centerKHz <= 0.0f)
-  {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM, "center_kHz must be > 0");
-  }
-  if (bandwidthKHz <= 0.0f)
-  {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM, "bandwidth_kHz must be > 0");
-  }
-  if (amplitude <= 0.0f || amplitude > 1.0f)
-  {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM, "amplitude must be in ]0, 1]");
-  }
-
-  uint16_t dec = static_cast<uint16_t>(decimation);
-  if (!m_hardware->setDecimation(dec))
-  {
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to set decimation");
-  }
-  m_status.currentDecimation = dec;
-
-  // Recreate signal processing chain with updated sampling frequency
-  double samplingFreq = 125000000.0 / dec;
-  m_signalGen = std::make_unique<SignalGenerator>(samplingFreq, dec);
-  m_fftProcessor = std::make_unique<FFTProcessor>(samplingFreq);
-
-  double centerHz = centerKHz * 1000.0;
-  double bandwidthHz = bandwidthKHz * 1000.0;
-
-  auto signal = m_signalGen->generateSincSignal(static_cast<uint32_t>(numSamples),
-                                                static_cast<uint32_t>(centerHz),
-                                                static_cast<uint32_t>(bandwidthHz), amplitude);
-
-  if (!m_hardware->loadGenerationSignal(signal))
-  {
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to load calibration signal");
-  }
-
-  m_status.measurementInProgress = true;
-  if (!m_hardware->startMeasurement(static_cast<uint32_t>(numSamples), 0))
-  {
-    m_status.measurementInProgress = false;
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE,
-                              "Failed to start calibration measurement");
-  }
-
-  if (!_waitForMeasurement())
-  {
-    m_status.measurementInProgress = false;
-    m_hardware->resetMeasurement();
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Calibration measurement timeout");
-  }
-
-  std::vector<float> acquired(static_cast<size_t>(numSamples));
-  if (!m_hardware->getAcquiredSignal(acquired))
-  {
-    m_status.measurementInProgress = false;
-    m_hardware->resetMeasurement();
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to read calibration data");
-  }
-
-  m_status.measurementInProgress = false;
-  m_hardware->resetMeasurement();
-
-  // Compute FFT of the loopback response
-  m_fftProcessor->applyWindow(acquired);
-  auto fftResult = m_fftProcessor->computeFFT(acquired);
-  auto magnitude = m_fftProcessor->computeMagnitudeSpectrum(fftResult);
-  auto phase = m_fftProcessor->computePhaseSpectrum(fftResult);
-  auto freqAxis = m_fftProcessor->getFrequencyAxis(static_cast<uint32_t>(numSamples));
-
-  // Filter to bandwidth range (same logic as MEASURE:SINC)
-  double lowFreq = centerHz - bandwidthHz / 2.0;
-  double highFreq = centerHz + bandwidthHz / 2.0;
-  if (lowFreq < 0.0)
-  {
-    lowFreq = 0.0;
-  }
-
-  std::vector<float> calFreqKHz;
-  std::vector<float> calMagnitude;
-  std::vector<float> calPhaseRad;
-
-  for (size_t i = 0; i < freqAxis.size() && i < magnitude.size(); ++i)
-  {
-    if (freqAxis[i] >= lowFreq && freqAxis[i] <= highFreq)
-    {
-      calFreqKHz.push_back(static_cast<float>(freqAxis[i] / 1000.0));
-      calMagnitude.push_back(magnitude[i]);
-      calPhaseRad.push_back(phase[i]);
-    }
-  }
-
-  if (calFreqKHz.empty())
-  {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM,
-                              "No frequency bins in specified calibration range");
-  }
-
-  // Store the calibration reference
-  CalibrationParams params;
-  params.decimation = dec;
-  params.numSamples = static_cast<uint32_t>(numSamples);
-  params.centerKHz = centerKHz;
-  params.bandwidthKHz = bandwidthKHz;
-  params.amplitude = amplitude;
-
-  m_calibration->setCalibration(calFreqKHz, calMagnitude, calPhaseRad, params);
-  m_status.calibrationActive = true;
-
-  std::ostringstream oss;
-  oss << "CALIBRATED " << calFreqKHz.size() << " points";
-  return buildOkResponse(oss.str());
-}
-
-std::string CommandHandler::_handleCalStatus(const ParsedCommand& cmd)
-{
-  (void)cmd;
-
-  if (!m_calibration)
-  {
-    return buildOkResponse("NOT_CALIBRATED");
-  }
-
-  return buildOkResponse(m_calibration->statusString());
-}
-
-std::string CommandHandler::_handleCalClear(const ParsedCommand& cmd)
-{
-  (void)cmd;
-
-  if (m_calibration)
-  {
-    m_calibration->clearCalibration();
-  }
-  m_status.calibrationActive = false;
-
-  return buildOkResponse("Calibration cleared");
-}
-
 std::string CommandHandler::_handleUnknown(const ParsedCommand& cmd)
 {
   return buildErrorResponse(ResponseStatus::ERR_SYNTAX, "Unknown command: " + cmd.rawLine);
@@ -876,11 +658,11 @@ bool CommandHandler::_checkInitialized(std::string& errorResponse)
 
 bool CommandHandler::_validateSampleCount(int numSamples, std::string& errorResponse)
 {
-  if (numSamples <= 0 || numSamples > static_cast<int>(RedPitayaHardware::MAX_SAMPLES))
+  if (numSamples <= 0 || numSamples > static_cast<int>(IRedPitayaHardware::MAX_SAMPLES))
   {
     errorResponse = buildErrorResponse(ResponseStatus::ERR_PARAM,
                                        "num_samples must be 1-" +
-                                           std::to_string(RedPitayaHardware::MAX_SAMPLES));
+                                           std::to_string(IRedPitayaHardware::MAX_SAMPLES));
     return false;
   }
   return true;
@@ -904,13 +686,14 @@ bool CommandHandler::_validateDecimation(int decimation, std::string& errorRespo
   return true;
 }
 
-bool CommandHandler::_waitForMeasurement(int timeoutMs)
+bool CommandHandler::_waitForMeasurement()
 {
   auto start = std::chrono::steady_clock::now();
   while (!m_hardware->isMeasurementComplete())
   {
     auto elapsed = std::chrono::steady_clock::now() - start;
-    if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() >= timeoutMs)
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() >=
+        m_measurementTimeoutMs)
     {
       return false;
     }

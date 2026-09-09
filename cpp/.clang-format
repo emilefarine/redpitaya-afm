@@ -1,0 +1,57 @@
+# C++ formatting configuration for your project
+# This configures clang-format to match your preferred style
+
+# Base style
+BasedOnStyle: LLVM
+
+# Language settings
+Language: Cpp
+Standard: c++17
+
+# Indentation
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+ColumnLimit: 100
+
+# Braces
+BreakBeforeBraces: Allman  # Opening braces on new line
+# Allman style puts opening brace on new line for functions, classes, etc.
+
+# Function declarations and definitions
+AlwaysBreakAfterReturnType: None  # Keep return type on same line as function name
+AllowShortFunctionsOnASingleLine: None
+AllowAllParametersOfDeclarationOnNextLine: true
+BinPackParameters: false  # One parameter per line when they don't fit
+AlignAfterOpenBracket: Align  # Align subsequent parameters under the first parameter
+PenaltyReturnTypeOnItsOwnLine: 200  # Prefer keeping return type with function name
+
+# Pointer and reference alignment
+PointerAlignment: Left  # int* ptr (or Middle for int * ptr, Right for int *ptr)
+# Note: You seem to prefer &magnitudeSpectrum on next line, which is handled by parameter breaking
+
+# Breaking long lines
+AllowAllArgumentsOnNextLine: true
+BreakConstructorInitializers: BeforeComma
+
+# Spacing
+SpaceAfterCStyleCast: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeParens: ControlStatements  # Space before parentheses in if, for, while
+SpacesInParentheses: false
+SpaceBeforeParensOptions:
+  AfterControlStatements: false  # No space: if(...) for(...) while(...)
+  AfterFunctionDeclarationName: false  # No space: function(...)
+  AfterFunctionDefinitionName: false
+
+# Other formatting
+AlignOperands: Align
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+
+# Includes
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+
+# Comments
+ReflowComments: true

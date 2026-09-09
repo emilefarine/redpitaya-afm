@@ -1,11 +1,11 @@
 #pragma once
 
-#include "../Hardware/ElectronicBoardUART.h"
-#include "../Hardware/RedPitayaHardware.h"
-#include "../SignalProcessing/CalibrationManager.h"
+#include "../Hardware/IElectronicBoard.h"
+#include "../Hardware/IRedPitayaHardware.h"
 #include "../SignalProcessing/FFTProcessor.h"
 #include "../SignalProcessing/ResonanceAnalyzer.h"
 #include "../SignalProcessing/SignalGenerator.h"
+#include "HardwareFactories.h"
 #include "Protocol.h"
 
 #include <memory>
@@ -19,26 +19,36 @@ struct SystemStatus
   bool hardwareInitialized;
   bool boardConnected;
   bool measurementInProgress;
-  bool calibrationActive;
   uint16_t currentDecimation;
 
   SystemStatus()
       : hardwareInitialized(false)
       , boardConnected(false)
       , measurementInProgress(false)
-      , calibrationActive(false)
-      , currentDecimation(RedPitayaHardware::DEFAULT_DECIMATION)
+      , currentDecimation(IRedPitayaHardware::DEFAULT_DECIMATION)
   {
   }
 };
 
 /**
  * @brief Command handler for AFM server
+ *
+ * Hardware instances are created lazily on SYSTEM:INIT through the injected
+ * factories. Tests inject factory functions returning mocks; production uses
+ * the defaults from HardwareFactories (real /dev/mem + UART implementations).
  */
 class CommandHandler
 {
 public:
-  CommandHandler();
+  /**
+   * @brief Construct a command handler
+   * @param hardwareFactory Creates the Red Pitaya hardware on SYSTEM:INIT
+   * @param boardFactory Creates the electronic board on SYSTEM:INIT
+   * @param measurementTimeoutMs Timeout for blocking measurement waits
+   */
+  explicit CommandHandler(HardwareFactory hardwareFactory = defaultHardwareFactory,
+                          BoardFactory boardFactory = defaultBoardFactory,
+                          int measurementTimeoutMs = 5000);
   ~CommandHandler();
 
   CommandHandler(const CommandHandler&) = delete;
@@ -85,14 +95,6 @@ private:
                                  // default using Hann window)
   std::string _handleMeasSweep(const ParsedCommand& cmd);
 
-  // CALIBRATE subsystem
-  std::string _handleCalRun(
-      const ParsedCommand&
-          cmd); // if we don't use Hann window during sinc measurement, the calibration will be
-                // wrong. Before sinc with another window, the calibration should be also done again
-  std::string _handleCalStatus(const ParsedCommand& cmd);
-  std::string _handleCalClear(const ParsedCommand& cmd);
-
   std::string _handleUnknown(const ParsedCommand& cmd);
 
   bool _checkInitialized(std::string& errorResponse);
@@ -103,14 +105,17 @@ private:
    * @brief Wait for measurement completion with timeout
    * @return true if measurement completed, false on timeout
    */
-  bool _waitForMeasurement(int timeoutMs = 5000);
+  bool _waitForMeasurement();
 
-  std::unique_ptr<RedPitayaHardware> m_hardware;
-  std::unique_ptr<ElectronicBoardUART> m_board;
+  HardwareFactory m_hardwareFactory;
+  BoardFactory m_boardFactory;
+  int m_measurementTimeoutMs;
+
+  std::unique_ptr<IRedPitayaHardware> m_hardware;
+  std::unique_ptr<IElectronicBoard> m_board;
   std::unique_ptr<SignalGenerator> m_signalGen;
   std::unique_ptr<FFTProcessor> m_fftProcessor;
   std::unique_ptr<ResonanceAnalyzer> m_resonanceAnalyzer;
-  std::unique_ptr<CalibrationManager> m_calibration;
 
   SystemStatus m_status;
 };

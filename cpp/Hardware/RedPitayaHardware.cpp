@@ -1,5 +1,7 @@
 #include "RedPitayaHardware.h"
 
+#include "DacCodec.h"
+
 #include <cmath>
 #include <fcntl.h>
 #include <iostream>
@@ -96,7 +98,7 @@ bool RedPitayaHardware::loadGenerationSignal(const std::vector<float>& signal)
       return false;
     }
 
-    int16_t dacValue = _voltageToDAC(signal[i]);
+    int16_t dacValue = DacCodec::voltageToDAC(signal[i]);
     *addr = static_cast<uint32_t>(dacValue);
 
     _unmapRegister(addr);
@@ -225,7 +227,7 @@ bool RedPitayaHardware::getAcquiredSignal(std::vector<float>& signal)
     }
 
     uint32_t rawValue = *addr;
-    signal[i] = _adcToVoltage(rawValue, m_decimation);
+    signal[i] = DacCodec::adcToVoltage(rawValue, m_decimation);
 
     _unmapRegister(addr);
   }
@@ -317,70 +319,3 @@ void RedPitayaHardware::_unmapRegister(volatile uint32_t* addr)
   }
 }
 
-int16_t RedPitayaHardware::_voltageToDAC(float voltage)
-{
-  // Clamp voltage to ±1V
-  if (voltage > 1.0f)
-  {
-    voltage = 1.0f;
-  }
-  if (voltage < -1.0f)
-  {
-    voltage = -1.0f;
-  }
-  // Scale to 14-bit signed range
-  float scale = static_cast<float>(MAX_DAC_VALUE - MIN_DAC_VALUE) / 2.0f;
-  int16_t value = static_cast<int16_t>(voltage * scale);
-
-  // Clamp to range
-  if (value > MAX_DAC_VALUE)
-  {
-    value = MAX_DAC_VALUE;
-  }
-  if (value < MIN_DAC_VALUE)
-  {
-    value = MIN_DAC_VALUE;
-  }
-
-  return value;
-}
-
-float RedPitayaHardware::_adcToVoltage(uint32_t rawValue, uint16_t decimation)
-{
-  uint8_t precisionBits;
-  if (decimation < 64)
-  {
-    precisionBits = 2;
-  }
-  else
-  {
-    precisionBits = 3;
-  }
-
-  // Extract precision bits (LSBs) and 14-bit ADC value (upper bits)
-  uint8_t precisionMask = (1 << precisionBits) - 1; // 0x3 for 2 bits, 0x7 for 3 bits
-  uint8_t precision = rawValue & precisionMask;
-  uint16_t value14bit = (rawValue >> precisionBits) & 0x3FFF;
-
-  // Sign-extend 14-bit value to 16-bit signed integer
-  int16_t signedValue;
-  if (value14bit & 0x2000) // Check bit 13 (sign bit of 14-bit number)
-  {
-    signedValue = static_cast<int16_t>(value14bit | 0xC000); // Sign-extend with 1s
-  }
-  else
-  {
-    signedValue = static_cast<int16_t>(value14bit);
-  }
-
-  float voltage = static_cast<float>(signedValue) / static_cast<float>(MAX_DAC_VALUE);
-
-  float lsbVoltage = 1.0f / static_cast<float>(MAX_DAC_VALUE);
-  float precisionFraction = static_cast<float>(precision) / static_cast<float>(1 << precisionBits);
-
-  // Precision bits are the lower bits of the value, so they are always added
-  // regardless of the sign of the upper bits (2's complement)
-  voltage += precisionFraction * lsbVoltage;
-
-  return voltage;
-}
