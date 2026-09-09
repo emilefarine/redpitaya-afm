@@ -91,14 +91,6 @@ std::string CommandHandler::handleCommand(const ParsedCommand& cmd)
   case Command::MEAS_SWEEP:
     return _handleMeasSweep(cmd);
 
-  // CALIBRATE subsystem
-  case Command::CAL_RUN:
-    return _handleCalRun(cmd);
-  case Command::CAL_STATUS:
-    return _handleCalStatus(cmd);
-  case Command::CAL_CLEAR:
-    return _handleCalClear(cmd);
-
   // Shutdown handled in TCPServer, unknown commands
   case Command::SYST_SHUTDOWN:
   case Command::UNKNOWN:
@@ -132,7 +124,6 @@ std::string CommandHandler::_handleRst(const ParsedCommand& cmd)
   m_signalGen.reset();
   m_fftProcessor.reset();
   m_resonanceAnalyzer.reset();
-  m_calibration.reset();
   m_status = SystemStatus();
   return buildOkResponse();
 }
@@ -167,7 +158,6 @@ std::string CommandHandler::_handleSystStatus(const ParsedCommand& cmd)
   oss << "HW_INIT=" << (m_status.hardwareInitialized ? "1" : "0")
       << " BOARD=" << (m_status.boardConnected ? "1" : "0")
       << " BUSY=" << (m_status.measurementInProgress ? "1" : "0")
-      << " CAL=" << (m_status.calibrationActive ? "1" : "0")
       << " DEC=" << m_status.currentDecimation;
 
   return buildOkResponse(oss.str());
@@ -207,9 +197,6 @@ std::string CommandHandler::_handleSystInit(const ParsedCommand& cmd)
   double samplingFreq = 125000000.0 / m_status.currentDecimation;
   m_signalGen = std::make_unique<SignalGenerator>(samplingFreq, m_status.currentDecimation);
 
-  // Initialize calibration manager
-  m_calibration = std::make_unique<CalibrationManager>();
-
   m_status.hardwareInitialized = true;
 
   std::ostringstream oss;
@@ -239,10 +226,8 @@ std::string CommandHandler::_handleSystDeinit(const ParsedCommand& cmd)
   }
 
   m_signalGen.reset();
-  m_calibration.reset();
   m_status.hardwareInitialized = false;
   m_status.boardConnected = false;
-  m_status.calibrationActive = false;
 
   return buildOkResponse("Hardware deinitialized");
 }
@@ -523,45 +508,6 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_PARAM, "No frequency bins in specified range");
   }
 
-  // Apply calibration if available and valid
-  if (m_calibration && m_calibration->isCalibrated())
-  {
-    CalibrationParams currentParams;
-    currentParams.decimation = dec;
-    currentParams.numSamples = static_cast<uint32_t>(numSamples);
-    currentParams.centerKHz = centerKHz;
-    currentParams.bandwidthKHz = bandwidthKHz;
-    currentParams.amplitude = amplitude;
-
-    if (m_calibration->isValidFor(currentParams))
-    {
-      std::vector<float> freqs, mags, phases;
-      freqs.reserve(spectrum.size());
-      mags.reserve(spectrum.size());
-      phases.reserve(spectrum.size());
-
-      for (const auto& pt : spectrum)
-      {
-        freqs.push_back(pt.freqKHz);
-        mags.push_back(pt.magnitude);
-        phases.push_back(pt.phaseRad);
-      }
-
-      m_calibration->applyCalibration(mags, phases, freqs);
-
-      for (size_t i = 0; i < spectrum.size(); ++i)
-      {
-        spectrum[i].magnitude = mags[i];
-        spectrum[i].phaseRad = phases[i];
-      }
-    }
-    else
-    {
-      std::cout << "[CommandHandler] Warning: Calibration parameters mismatch, "
-                << "skipping calibration. Re-calibrate with matching settings." << std::endl;
-    }
-  }
-
   return buildSpectrumResponse(spectrum);
 }
 
@@ -692,179 +638,6 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
   m_status.measurementInProgress = false;
 
   return buildSpectrumResponse(spectrum);
-}
-
-// ---- CALIBRATE subsystem ----
-
-std::string CommandHandler::_handleCalRun(const ParsedCommand& cmd)
-{
-  std::string error;
-  if (!_checkInitialized(error))
-  {
-    return error;
-  }
-
-  // Parse arguments: CALIBRATE:RUN
-  // <center_kHz>,<bandwidth_kHz>[,<num_samples>,<decimation>,<amplitude>]
-  float centerKHz, bandwidthKHz;
-  if (!cmd.getArgFloat(0, centerKHz) || !cmd.getArgFloat(1, bandwidthKHz))
-  {
-    return buildErrorResponse(
-        ResponseStatus::ERR_SYNTAX,
-        "Usage: CALIBRATE:RUN "
-        "<center_kHz>,<bandwidth_kHz>[,<num_samples>,<decimation>,<amplitude>]");
-  }
-
-  // Optional parameters with defaults
-  int numSamples = 8192;
-  int decimation = 64;
-  float amplitude = 1.0f;
-
-  cmd.getArgInt(2, numSamples);
-  cmd.getArgInt(3, decimation);
-  cmd.getArgFloat(4, amplitude);
-
-  if (!_validateSampleCount(numSamples, error))
-    return error;
-  if (!_validateDecimation(decimation, error))
-    return error;
-  if (centerKHz <= 0.0f)
-  {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM, "center_kHz must be > 0");
-  }
-  if (bandwidthKHz <= 0.0f)
-  {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM, "bandwidth_kHz must be > 0");
-  }
-  if (amplitude <= 0.0f || amplitude > 1.0f)
-  {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM, "amplitude must be in ]0, 1]");
-  }
-
-  uint16_t dec = static_cast<uint16_t>(decimation);
-  if (!m_hardware->setDecimation(dec))
-  {
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to set decimation");
-  }
-  m_status.currentDecimation = dec;
-
-  // Recreate signal processing chain with updated sampling frequency
-  double samplingFreq = 125000000.0 / dec;
-  m_signalGen = std::make_unique<SignalGenerator>(samplingFreq, dec);
-  m_fftProcessor = std::make_unique<FFTProcessor>(samplingFreq);
-
-  double centerHz = centerKHz * 1000.0;
-  double bandwidthHz = bandwidthKHz * 1000.0;
-
-  auto signal = m_signalGen->generateSincSignal(static_cast<uint32_t>(numSamples),
-                                                static_cast<uint32_t>(centerHz),
-                                                static_cast<uint32_t>(bandwidthHz), amplitude);
-
-  if (!m_hardware->loadGenerationSignal(signal))
-  {
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to load calibration signal");
-  }
-
-  m_status.measurementInProgress = true;
-  if (!m_hardware->startMeasurement(static_cast<uint32_t>(numSamples), 0))
-  {
-    m_status.measurementInProgress = false;
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE,
-                              "Failed to start calibration measurement");
-  }
-
-  if (!_waitForMeasurement())
-  {
-    m_status.measurementInProgress = false;
-    m_hardware->resetMeasurement();
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Calibration measurement timeout");
-  }
-
-  std::vector<float> acquired(static_cast<size_t>(numSamples));
-  if (!m_hardware->getAcquiredSignal(acquired))
-  {
-    m_status.measurementInProgress = false;
-    m_hardware->resetMeasurement();
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to read calibration data");
-  }
-
-  m_status.measurementInProgress = false;
-  m_hardware->resetMeasurement();
-
-  // Compute FFT of the loopback response
-  m_fftProcessor->applyWindow(acquired);
-  auto fftResult = m_fftProcessor->computeFFT(acquired);
-  auto magnitude = m_fftProcessor->computeMagnitudeSpectrum(fftResult);
-  auto phase = m_fftProcessor->computePhaseSpectrum(fftResult);
-  auto freqAxis = m_fftProcessor->getFrequencyAxis(static_cast<uint32_t>(numSamples));
-
-  // Filter to bandwidth range (same logic as MEASURE:SINC)
-  double lowFreq = centerHz - bandwidthHz / 2.0;
-  double highFreq = centerHz + bandwidthHz / 2.0;
-  if (lowFreq < 0.0)
-  {
-    lowFreq = 0.0;
-  }
-
-  std::vector<float> calFreqKHz;
-  std::vector<float> calMagnitude;
-  std::vector<float> calPhaseRad;
-
-  for (size_t i = 0; i < freqAxis.size() && i < magnitude.size(); ++i)
-  {
-    if (freqAxis[i] >= lowFreq && freqAxis[i] <= highFreq)
-    {
-      calFreqKHz.push_back(static_cast<float>(freqAxis[i] / 1000.0));
-      calMagnitude.push_back(magnitude[i]);
-      calPhaseRad.push_back(phase[i]);
-    }
-  }
-
-  if (calFreqKHz.empty())
-  {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM,
-                              "No frequency bins in specified calibration range");
-  }
-
-  // Store the calibration reference
-  CalibrationParams params;
-  params.decimation = dec;
-  params.numSamples = static_cast<uint32_t>(numSamples);
-  params.centerKHz = centerKHz;
-  params.bandwidthKHz = bandwidthKHz;
-  params.amplitude = amplitude;
-
-  m_calibration->setCalibration(calFreqKHz, calMagnitude, calPhaseRad, params);
-  m_status.calibrationActive = true;
-
-  std::ostringstream oss;
-  oss << "CALIBRATED " << calFreqKHz.size() << " points";
-  return buildOkResponse(oss.str());
-}
-
-std::string CommandHandler::_handleCalStatus(const ParsedCommand& cmd)
-{
-  (void)cmd;
-
-  if (!m_calibration)
-  {
-    return buildOkResponse("NOT_CALIBRATED");
-  }
-
-  return buildOkResponse(m_calibration->statusString());
-}
-
-std::string CommandHandler::_handleCalClear(const ParsedCommand& cmd)
-{
-  (void)cmd;
-
-  if (m_calibration)
-  {
-    m_calibration->clearCalibration();
-  }
-  m_status.calibrationActive = false;
-
-  return buildOkResponse("Calibration cleared");
 }
 
 std::string CommandHandler::_handleUnknown(const ParsedCommand& cmd)

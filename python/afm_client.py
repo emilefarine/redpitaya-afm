@@ -78,6 +78,39 @@ class GainSetting(Enum):
 
 
 @dataclass
+class BoardStatus:
+    """Electronic board state parsed from BOARD:STATUS? text block.
+
+    routing maps output connector number (1-4) to input connector number
+    (1-4), or None when the output is disconnected. gains maps input
+    connector number (1-4) to its gain label string ("1/8" ... "16").
+    """
+    routing: dict = field(default_factory=dict)
+    gains: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_response(cls, response: str) -> 'BoardStatus':
+        """Parse the multi-line MUX status block printed by the board."""
+        import re
+
+        status = cls()
+        for line in response.splitlines():
+            line = line.strip()
+            m = re.match(r'^OUT(\d)\s*<-\s*IN(\d)', line)
+            if m:
+                status.routing[int(m.group(1))] = int(m.group(2))
+                continue
+            m = re.match(r'^OUT(\d)\s*<-\s*X', line)
+            if m:
+                status.routing[int(m.group(1))] = None
+                continue
+            m = re.match(r'^IN(\d):\s*x(\S+)', line)
+            if m:
+                status.gains[int(m.group(1))] = m.group(2)
+        return status
+
+
+@dataclass
 class SpectrumData:
     """Spectrum measurement result from MEASURE:SINC or MEASURE:SWEEP"""
     freq_kHz: np.ndarray = field(default_factory=lambda: np.array([], dtype=np.float64))
@@ -95,7 +128,6 @@ class SystemStatus:
     hardware_initialized: bool = False
     board_connected: bool = False
     measurement_in_progress: bool = False
-    calibration_active: bool = False
     decimation: int = 64
 
     @classmethod
@@ -113,8 +145,6 @@ class SystemStatus:
                     status.board_connected = value == '1'
                 elif key == 'BUSY':
                     status.measurement_in_progress = value == '1'
-                elif key == 'CAL':
-                    status.calibration_active = value == '1'
                 elif key == 'DEC':
                     status.decimation = int(value)
 
@@ -516,6 +546,10 @@ class AFMClient:
         self._send("BOARD:STATUS?")
         return self._read_board_status_response()
 
+    def get_board_state(self) -> BoardStatus:
+        """Get electronic board routing and gains as a parsed BoardStatus."""
+        return BoardStatus.from_response(self.get_board_status())
+
     # ------ Measurement Commands --------
 
     def _read_spectrum_response(self, timeout: Optional[float] = None) -> SpectrumData:
@@ -681,60 +715,6 @@ class AFMClient:
         self._flush_buffer()
         self._send(cmd)
         return self._read_spectrum_response(timeout=sweep_timeout)
-
-    # ------ Calibration Commands --------
-
-    def calibrate(
-        self,
-        center_kHz: float,
-        bandwidth_kHz: float,
-        num_samples: int = 8192,
-        decimation: int = 64,
-        amplitude: float = 1.0,
-    ) -> str:
-        """
-        Run a loopback calibration measurement.
-
-        The DAC output must be physically connected through the electronic
-        board back to the ADC input before calling this.  The server stores
-        the resulting spectrum as the reference transfer function H_ref(f).
-        Subsequent MEASURE:SINC calls will automatically divide by H_ref
-        to remove system artifacts.
-
-        Args:
-            center_kHz: Center frequency in kHz
-            bandwidth_kHz: Bandwidth in kHz
-            num_samples: Number of samples (1-32768, default 8192)
-            decimation: FPGA decimation factor (power of 2, 16-1024, default 64)
-            amplitude: Signal amplitude 0-1 (default 1.0)
-
-        Returns:
-            Calibration status message (e.g. "CALIBRATED 167 points")
-
-        Raises:
-            AFMCommandError: If calibration measurement fails
-        """
-        cmd = (f"CALIBRATE:RUN {center_kHz},{bandwidth_kHz},"
-               f"{num_samples},{decimation},{amplitude}")
-        return self.send_command(cmd)
-
-    def get_calibration_status(self) -> str:
-        """
-        Query the current calibration state.
-
-        Returns:
-            Status string, e.g. "CALIBRATED DEC=64 N=8192 CENTER=500.0
-            BW=200.0 AMP=1.0 POINTS=167" or "NOT_CALIBRATED"
-        """
-        return self.send_command("CALIBRATE:STATUS?")
-
-    def clear_calibration(self) -> None:
-        """
-        Clear stored calibration data.
-
-        Subsequent measurements will return raw (uncalibrated) results.
-        """
-        self.send_command("CALIBRATE:CLEAR")
 
 # ------ Convenience Functions --------
 

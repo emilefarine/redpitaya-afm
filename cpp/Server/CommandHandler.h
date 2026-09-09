@@ -2,7 +2,6 @@
 
 #include "../Hardware/IElectronicBoard.h"
 #include "../Hardware/IRedPitayaHardware.h"
-#include "../SignalProcessing/CalibrationManager.h"
 #include "../SignalProcessing/FFTProcessor.h"
 #include "../SignalProcessing/ResonanceAnalyzer.h"
 #include "../SignalProcessing/SignalGenerator.h"
@@ -20,14 +19,12 @@ struct SystemStatus
   bool hardwareInitialized;
   bool boardConnected;
   bool measurementInProgress;
-  bool calibrationActive;
   uint16_t currentDecimation;
 
   SystemStatus()
       : hardwareInitialized(false)
       , boardConnected(false)
       , measurementInProgress(false)
-      , calibrationActive(false)
       , currentDecimation(IRedPitayaHardware::DEFAULT_DECIMATION)
   {
   }
@@ -98,14 +95,6 @@ private:
                                  // default using Hann window)
   std::string _handleMeasSweep(const ParsedCommand& cmd);
 
-  // CALIBRATE subsystem
-  std::string _handleCalRun(
-      const ParsedCommand&
-          cmd); // if we don't use Hann window during sinc measurement, the calibration will be
-                // wrong. Before sinc with another window, the calibration should be also done again
-  std::string _handleCalStatus(const ParsedCommand& cmd);
-  std::string _handleCalClear(const ParsedCommand& cmd);
-
   std::string _handleUnknown(const ParsedCommand& cmd);
 
   bool _checkInitialized(std::string& errorResponse);
@@ -127,7 +116,6 @@ private:
   std::unique_ptr<SignalGenerator> m_signalGen;
   std::unique_ptr<FFTProcessor> m_fftProcessor;
   std::unique_ptr<ResonanceAnalyzer> m_resonanceAnalyzer;
-  std::unique_ptr<CalibrationManager> m_calibration;
 
   SystemStatus m_status;
 };

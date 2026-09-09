@@ -43,7 +43,7 @@ OUT_DIR = out
 PRGS = test_all
 
 # Test programs (in Test/ folder)
-TEST_PRGS = hardware_loopback_test quartz_sweep_config quartz_sinc_broadband electronic_board_test single_bram_validation_test calibration_loopback_test
+TEST_PRGS = hardware_loopback_test quartz_sweep_config quartz_sinc_broadband electronic_board_test single_bram_validation_test
 
 # Server program
 SERVER_PRG = afm_server
@@ -74,7 +74,6 @@ HOST_UNITTEST   = $(HOST_BUILD_DIR)/unit_tests.exe
 HOST_SRCS  = $(SIGNAL_DIR)/SignalGenerator.cpp \
              $(SIGNAL_DIR)/FFTProcessor.cpp \
              $(SIGNAL_DIR)/ResonanceAnalyzer.cpp \
-             $(SIGNAL_DIR)/CalibrationManager.cpp \
              $(SERVER_DIR)/CommandHandler.cpp
 
 HOST_OBJS      = $(patsubst $(SIGNAL_DIR)/%.cpp,$(HOST_OBJ_DIR)/%.o,$(filter $(SIGNAL_DIR)/%,$(HOST_SRCS))) \
@@ -86,7 +85,7 @@ HOST_CXXFLAGS = -std=c++17 -Wall -Wextra -g -O0 --coverage \
 HOST_LDLIBS   = -lgtest_main -lgmock -lgtest -lfftw3f -lpthread
 
 # Signal processing library objects (in SignalProcessing folder)
-SIGNAL_PROCESSING_OBJS = $(SIGNAL_DIR)/SignalGenerator.o $(SIGNAL_DIR)/FFTProcessor.o $(SIGNAL_DIR)/ResonanceAnalyzer.o $(SIGNAL_DIR)/CalibrationManager.o
+SIGNAL_PROCESSING_OBJS = $(SIGNAL_DIR)/SignalGenerator.o $(SIGNAL_DIR)/FFTProcessor.o $(SIGNAL_DIR)/ResonanceAnalyzer.o
 
 # Hardware abstraction layer objects (in Hardware folder)
 HARDWARE_OBJS = $(HARDWARE_DIR)/RedPitayaHardware.o $(HARDWARE_DIR)/ElectronicBoardUART.o
@@ -159,10 +158,6 @@ electronic_board_test: $(OUT_DIR) $(TEST_DIR)/electronic_board_test.cpp $(HARDWA
 # Single-BRAM validation test suite (6 sub-tests for in-place overwrite safety)
 single_bram_validation_test: $(OUT_DIR) $(TEST_DIR)/single_bram_validation_test.cpp $(SIGNAL_PROCESSING_OBJS) $(HARDWARE_OBJS)
 	$(CXX) $(TEST_DIR)/single_bram_validation_test.cpp $(SIGNAL_PROCESSING_OBJS) $(HARDWARE_OBJS) $(CXXFLAGS) $(SIGNAL_LDLIBS) -o $(OUT_DIR)/$@
-
-# Calibration loopback comparison test (DAC -> board -> ADC, raw vs calibrated)
-calibration_loopback_test: $(OUT_DIR) $(TEST_DIR)/calibration_loopback_test.cpp $(SIGNAL_PROCESSING_OBJS) $(HARDWARE_OBJS)
-	$(CXX) $(TEST_DIR)/calibration_loopback_test.cpp $(SIGNAL_PROCESSING_OBJS) $(HARDWARE_OBJS) $(CXXFLAGS) $(SIGNAL_LDLIBS) -o $(OUT_DIR)/$@
 
 # Server Program
 # --------------
@@ -260,8 +255,7 @@ help:
 	@echo "  quartz_sweep_config       - Quartz resonator sweep test"
 	@echo "  quartz_sinc_broadband     - Broadband sinc signal test"
 	@echo "  electronic_board_test     - Electronic board UART test"
-	@echo "  single_bram_validation_test - Single-BRAM in-place overwrite validation"
-	@echo "  calibration_loopback_test - Calibration loopback comparison (raw vs calibrated)"
+  @echo "  single_bram_validation_test - Single-BRAM in-place overwrite validation"
 	@echo ""
 	@echo "Server usage:"
 	@echo "  On RedPitaya: ./out/afm_server [port]"
