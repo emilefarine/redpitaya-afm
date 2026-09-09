@@ -147,32 +147,6 @@ bool ElectronicBoardUART::reset()
   return _sendCommand("RESET");
 }
 
-const char* ElectronicBoardUART::gainToString(GainSetting gain)
-{
-  switch (gain)
-  {
-  case GainSetting::GAIN_1_8:
-    return "1/8";
-  case GainSetting::GAIN_1_4:
-    return "1/4";
-  case GainSetting::GAIN_1_2:
-    return "1/2";
-  case GainSetting::GAIN_1:
-    return "1";
-  case GainSetting::GAIN_2:
-    return "2";
-  case GainSetting::GAIN_4:
-    return "4";
-  case GainSetting::GAIN_8:
-    return "8";
-  case GainSetting::GAIN_16:
-    return "16";
-
-  default:
-    return "?";
-  }
-}
-
 const std::string& ElectronicBoardUART::getLastError() const
 {
   return m_lastError;
