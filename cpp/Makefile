@@ -62,7 +62,8 @@ HOST_SRCS  = $(SIGNAL_DIR)/SignalGenerator.cpp \
              $(SIGNAL_DIR)/FFTProcessor.cpp \
              $(SIGNAL_DIR)/ResonanceAnalyzer.cpp \
              $(HARDWARE_DIR)/BoardProtocol.cpp \
-             $(SERVER_DIR)/CommandHandler.cpp
+             $(SERVER_DIR)/CommandHandler.cpp \
+             $(SERVER_DIR)/ServerOptions.cpp
 
 HOST_OBJS      = $(patsubst $(SIGNAL_DIR)/%.cpp,$(HOST_OBJ_DIR)/%.o,$(filter $(SIGNAL_DIR)/%,$(HOST_SRCS))) \
                  $(patsubst $(HARDWARE_DIR)/%.cpp,$(HOST_OBJ_DIR)/%.o,$(filter $(HARDWARE_DIR)/%,$(HOST_SRCS))) \
@@ -81,7 +82,8 @@ HARDWARE_OBJS = $(HARDWARE_DIR)/RedPitayaHardware.o $(HARDWARE_DIR)/ElectronicBo
                 $(HARDWARE_DIR)/BoardProtocol.o
 
 # Server objects (in Server folder)
-SERVER_OBJS = $(SERVER_DIR)/TCPServer.o $(SERVER_DIR)/CommandHandler.o $(SERVER_DIR)/HardwareFactories.o
+SERVER_OBJS = $(SERVER_DIR)/TCPServer.o $(SERVER_DIR)/CommandHandler.o $(SERVER_DIR)/HardwareFactories.o \
+              $(SERVER_DIR)/ServerOptions.o
 
 # OLED display objects (in Hardware folder)
 OLED_OBJS = $(HARDWARE_DIR)/SSD1306.o
