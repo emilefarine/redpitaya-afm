@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../Common/LineBuffer.h"
 #include "Protocol.h"
 
 #include <atomic>
@@ -140,7 +141,7 @@ private:
   std::atomic<bool> m_running;
   std::atomic<bool> m_shouldStop;
   std::string m_lastError;
-  std::string m_recvBuffer;
+  LineBuffer m_lineBuffer;
   CommandCallback m_commandHandler;
   std::thread m_serverThread;
 };

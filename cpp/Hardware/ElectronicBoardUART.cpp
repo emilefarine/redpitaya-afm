@@ -18,6 +18,7 @@ ElectronicBoardUART::ElectronicBoardUART(const std::string& devicePath, uint32_t
     : m_devicePath(devicePath)
     , m_baudRate(baudRate)
     , m_fd(-1)
+    , m_lineBuffer(MAX_RECV_BUFFER)
 {
 }
 
@@ -46,7 +47,7 @@ bool ElectronicBoardUART::initialize()
 
   // Clear any pending data
   tcflush(m_fd, TCIOFLUSH);
-  m_recvBuffer.clear();
+  m_lineBuffer.clear();
 
   // Probe the board: send a command and check for a response.
   std::string probeResponse;
@@ -72,7 +73,7 @@ void ElectronicBoardUART::close()
     ::close(m_fd);
     m_fd = -1;
   }
-  m_recvBuffer.clear();
+  m_lineBuffer.clear();
 }
 
 bool ElectronicBoardUART::isConnected() const
@@ -303,26 +304,13 @@ bool ElectronicBoardUART::_sendCommand(const std::string& command,
 
 bool ElectronicBoardUART::_readLine(std::string& line, uint32_t timeoutMs)
 {
-  line.clear();
-
   auto startTime = std::chrono::steady_clock::now();
   auto timeout = std::chrono::milliseconds(timeoutMs);
 
   while (true)
   {
-    // First, check if we already have a complete line in the persistent buffer
-    size_t newlinePos = m_recvBuffer.find('\n');
-    if (newlinePos != std::string::npos)
+    if (m_lineBuffer.popLine(line))
     {
-      line = m_recvBuffer.substr(0, newlinePos);
-      m_recvBuffer.erase(0, newlinePos + 1);
-
-      // Remove trailing \r if present
-      if (!line.empty() && line.back() == '\r')
-      {
-        line.pop_back();
-      }
-
       // Skip empty lines (e.g., from \r\n sequences)
       if (!line.empty())
       {
@@ -382,13 +370,10 @@ bool ElectronicBoardUART::_readLine(std::string& line, uint32_t timeoutMs)
       continue;
     }
 
-    // Append to persistent buffer
-    m_recvBuffer.append(buffer, static_cast<size_t>(bytesRead));
-
-    if (m_recvBuffer.size() > MAX_RECV_BUFFER &&
-        m_recvBuffer.find('\n') == std::string::npos)
+    if (m_lineBuffer.append(buffer, static_cast<size_t>(bytesRead)) ==
+        LineBuffer::AppendResult::Overflow)
     {
-      m_recvBuffer.clear();
+      m_lineBuffer.clear();
       m_lastError = "Receive buffer overflow (no line terminator)";
       return false;
     }

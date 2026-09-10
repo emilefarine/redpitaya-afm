@@ -11,6 +11,7 @@ SIGNAL_LDLIBS = -lfftw3f -lm -lstdc++
 CXXFLAGS  = -std=c++17 -Wall -O2
 CXXFLAGS += -I$(RP_INCLUDE)
 CXXFLAGS += -I$(RP_INCLUDE)/api250-12
+CXXFLAGS += -ICommon            # Add Common folder to include path
 CXXFLAGS += -ISignalProcessing  # Add SignalProcessing folder to include path
 CXXFLAGS += -IHardware          # Add Hardware folder to include path
 
@@ -67,7 +68,7 @@ HOST_OBJS      = $(patsubst $(SIGNAL_DIR)/%.cpp,$(HOST_OBJ_DIR)/%.o,$(filter $(S
 UNITTEST_SRCS  = $(wildcard $(UNITTEST_DIR)/*.cpp)
 
 HOST_CXXFLAGS = -std=c++17 -Wall -Wextra -g -O0 --coverage \
-                -I$(SIGNAL_DIR) -I$(HARDWARE_DIR) -IServer -Itests
+                -ICommon -I$(SIGNAL_DIR) -I$(HARDWARE_DIR) -IServer -Itests
 HOST_LDLIBS   = -lgtest_main -lgmock -lgtest -lfftw3f -lpthread
 
 # Signal processing library objects (in SignalProcessing folder)
@@ -148,7 +149,7 @@ coverage: $(HOST_UNITTEST)
 	$(RM) $(HOST_OBJ_DIR)/*.gcda $(HOST_BUILD_DIR)/*.gcda
 	$(HOST_UNITTEST)
 	mkdir -p $(HOST_COV_DIR)
-	gcovr --root . --filter $(SIGNAL_DIR)/ --filter Server/ --filter Hardware/DacCodec.h \
+	gcovr --root . --filter $(SIGNAL_DIR)/ --filter Server/ --filter Common/ --filter Hardware/DacCodec.h \
 	      --print-summary --html-details $(HOST_COV_DIR)/index.html
 
 # Remove host test build artifacts (objects, coverage data, reports)

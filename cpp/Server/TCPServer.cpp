@@ -20,6 +20,7 @@ TCPServer::TCPServer(uint16_t port)
     , m_clientFd(-1)
     , m_running(false)
     , m_shouldStop(false)
+    , m_lineBuffer(ServerConfig::RECV_BUFFER_SIZE * 4)
 {
 }
 
@@ -259,7 +260,7 @@ void TCPServer::_acceptClient()
 
 void TCPServer::_handleClient()
 {
-  m_recvBuffer.clear();
+  m_lineBuffer.clear();
   auto lastActivityTime = std::chrono::steady_clock::now();
 
   while (!m_shouldStop.load() && m_clientFd >= 0)
@@ -341,20 +342,8 @@ void TCPServer::_handleClient()
  */
 int TCPServer::_readLine(std::string& line)
 {
-  line.clear();
-
-  // Check if we already have a complete line in buffer
-  size_t newlinePos = m_recvBuffer.find('\n');
-  if (newlinePos != std::string::npos)
+  if (m_lineBuffer.popLine(line))
   {
-    line = m_recvBuffer.substr(0, newlinePos);
-    m_recvBuffer.erase(0, newlinePos + 1);
-
-    // Remove trailing \r if present
-    if (!line.empty() && line.back() == '\r')
-    {
-      line.pop_back();
-    }
     return 1; // Line available
   }
 
@@ -384,7 +373,7 @@ int TCPServer::_readLine(std::string& line)
 
   // Read available data
   char buffer[ServerConfig::RECV_BUFFER_SIZE];
-  ssize_t bytesRead = recv(m_clientFd, buffer, sizeof(buffer) - 1, 0);
+  ssize_t bytesRead = recv(m_clientFd, buffer, sizeof(buffer), 0);
 
   if (bytesRead <= 0)
   {
@@ -395,35 +384,15 @@ int TCPServer::_readLine(std::string& line)
     return -1; // Connection closed or error
   }
 
-  buffer[bytesRead] = '\0';
-
-  // Buffer overflow protection: allow accumulating up to 4 recv() calls worth of data
-  // before considering it a malformed input (no newline in sight)
-  constexpr size_t MAX_LINE_LENGTH = ServerConfig::RECV_BUFFER_SIZE * 4;
-  if (m_recvBuffer.size() + bytesRead > MAX_LINE_LENGTH)
+  if (m_lineBuffer.append(buffer, static_cast<size_t>(bytesRead)) ==
+      LineBuffer::AppendResult::Overflow)
   {
     _log("Line too long, rejecting client");
-    m_recvBuffer.clear();
+    m_lineBuffer.clear();
     return -1;
   }
 
-  m_recvBuffer += buffer;
-
-  // Check for complete line
-  newlinePos = m_recvBuffer.find('\n');
-  if (newlinePos != std::string::npos)
-  {
-    line = m_recvBuffer.substr(0, newlinePos);
-    m_recvBuffer.erase(0, newlinePos + 1);
-
-    if (!line.empty() && line.back() == '\r')
-    {
-      line.pop_back();
-    }
-    return 1; // Line available
-  }
-
-  return 0; // Partial data, need more
+  return m_lineBuffer.popLine(line) ? 1 : 0;
 }
 
 bool TCPServer::sendToClient(const std::string& message)
