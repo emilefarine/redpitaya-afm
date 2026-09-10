@@ -54,17 +54,10 @@ jobs:
         shell: pwsh
         run: pip install gcovr
 
-      - name: Run host unit tests (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          cd cpp
-          make test_host
-
       - name: Run host unit tests with ASan/UBSan (Linux)
         if: runner.os == 'Linux'
         run: |
           cd cpp
-          make clean_host
           make test_host_san
 
       - name: Run host unit tests (Windows)
