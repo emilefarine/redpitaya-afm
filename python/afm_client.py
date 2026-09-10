@@ -97,7 +97,7 @@ class GainSetting(Enum):
     GAIN_16 = 7
 
 
-class OperatingMode(str, Enum):
+class OperatingMode(Enum):
     """Server operating modes matching AFM::OperatingMode"""
     FULL = "FULL"        # Red Pitaya with optional electronic board
     RP_ONLY = "RP_ONLY"  # Red Pitaya only, board disabled
