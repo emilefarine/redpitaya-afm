@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Unit tests for rp_deploy helpers (no SSH required)."""
 
+import io
 import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -59,6 +61,74 @@ class ResolveBitfileTests(unittest.TestCase):
             local, binpath = rp_deploy.resolve_bitfile(None)
             self.assertIsNone(local)
             self.assertEqual(Path(binpath).name, "new.bit.bin")
+
+
+class SyncCppFilesTests(unittest.TestCase):
+    def _run_sync(self, scp):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "Server" / "main.cpp"
+            source.parent.mkdir()
+            source.write_text("int main() {}")
+
+            originals = {
+                "LOCAL_PROJECT": rp_deploy.LOCAL_PROJECT,
+                "REMOTE_PROJECT": rp_deploy.REMOTE_PROJECT,
+                "run_remote": rp_deploy.run_remote,
+            }
+            rp_deploy.LOCAL_PROJECT = tmp
+            rp_deploy.REMOTE_PROJECT = "/remote/cpp"
+            rp_deploy.run_remote = lambda ssh, command: (0, "", "")
+            try:
+                with redirect_stdout(io.StringIO()):
+                    return rp_deploy.sync_cpp_files(scp, object())
+            finally:
+                for name, value in originals.items():
+                    setattr(rp_deploy, name, value)
+
+    def test_success_returns_true(self):
+        class RecordingSCP:
+            def __init__(self):
+                self.copies = []
+
+            def put(self, local, remote):
+                self.copies.append((local, remote))
+
+        scp = RecordingSCP()
+        self.assertTrue(self._run_sync(scp))
+        self.assertEqual(len(scp.copies), 1)
+        self.assertTrue(scp.copies[0][1].endswith("Server/main.cpp"))
+
+    def test_scp_failure_returns_false(self):
+        class FailingSCP:
+            def put(self, local, remote):
+                raise OSError("disk full")
+
+        self.assertFalse(self._run_sync(FailingSCP()))
+
+    def test_remote_delete_failure_returns_false(self):
+        def run_remote(ssh, command):
+            if command.startswith("find "):
+                return 0, "/remote/cpp/Stale.cpp", ""
+            if command.startswith("rm -f"):
+                return 1, "", "permission denied"
+            return 0, "", ""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            originals = {
+                "LOCAL_PROJECT": rp_deploy.LOCAL_PROJECT,
+                "REMOTE_PROJECT": rp_deploy.REMOTE_PROJECT,
+                "run_remote": rp_deploy.run_remote,
+            }
+            rp_deploy.LOCAL_PROJECT = tmp
+            rp_deploy.REMOTE_PROJECT = "/remote/cpp"
+            rp_deploy.run_remote = run_remote
+            try:
+                with redirect_stdout(io.StringIO()):
+                    result = rp_deploy.sync_cpp_files(object(), object())
+            finally:
+                for name, value in originals.items():
+                    setattr(rp_deploy, name, value)
+        self.assertFalse(result)
 
 
 if __name__ == "__main__":
