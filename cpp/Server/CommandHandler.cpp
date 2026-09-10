@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -473,10 +474,10 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
 
   if (centerHz + bandwidthHz / 2.0 >= nyquistHz)
   {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM,
-                              "excitation band exceeds Nyquist (" +
-                                  std::to_string(nyquistHz / 1000.0) + " kHz) at decimation " +
-                                  std::to_string(dec));
+    std::ostringstream oss;
+    oss << "excitation band exceeds Nyquist (" << std::fixed << std::setprecision(3)
+        << nyquistHz / 1000.0 << " kHz) at decimation " << dec;
+    return buildErrorResponse(ResponseStatus::ERR_PARAM, oss.str());
   }
 
   if (!m_hardware->setDecimation(dec))
@@ -614,18 +615,26 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
 
   if (stopKHz >= nyquistKHz)
   {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM,
-                              "sweep stop frequency exceeds Nyquist (" +
-                                  std::to_string(nyquistKHz) + " kHz) at decimation " +
-                                  std::to_string(dec));
+    std::ostringstream oss;
+    oss << "sweep stop frequency exceeds Nyquist (" << std::fixed << std::setprecision(3)
+        << nyquistKHz << " kHz) at decimation " << dec;
+    return buildErrorResponse(ResponseStatus::ERR_PARAM, oss.str());
   }
 
   double pointsEstimate = std::floor((stopKHz - startKHz) / stepKHz) + 1.0;
   if (pointsEstimate > static_cast<double>(ServerConfig::MAX_SWEEP_POINTS))
   {
     std::ostringstream oss;
-    oss << "sweep would take " << pointsEstimate << " points (max "
-        << ServerConfig::MAX_SWEEP_POINTS << ")";
+    oss << "sweep would take ";
+    if (pointsEstimate > 1.0e9)
+    {
+      oss << "more than 1e9";
+    }
+    else
+    {
+      oss << std::fixed << std::setprecision(0) << pointsEstimate;
+    }
+    oss << " points (max " << ServerConfig::MAX_SWEEP_POINTS << ")";
     return buildErrorResponse(ResponseStatus::ERR_PARAM, oss.str());
   }
   size_t numPoints = static_cast<size_t>(pointsEstimate);

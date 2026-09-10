@@ -360,6 +360,8 @@ TEST_F(CommandHandlerTest, SweepRejectsTooManyPoints)
   std::string resp = send("MEASURE:SWEEP 200,10,0.0001");
   EXPECT_NE(resp.find("ERR_PARAM"), std::string::npos);
   EXPECT_NE(resp.find("4096"), std::string::npos);
+  EXPECT_NE(resp.find("points (max"), std::string::npos);
+  EXPECT_EQ(resp.find("e+"), std::string::npos);
 }
 
 TEST_F(CommandHandlerTest, SweepTimeoutReturnsHardwareErrorAndResets)
