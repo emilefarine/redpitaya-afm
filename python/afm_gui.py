@@ -260,6 +260,7 @@ class AFMMainWindow(QMainWindow):
         self._pending_measure_mode = "sinc"
         self._closing = False
         self.board_available = False
+        self._controls_enabled = False
 
         # Display-scaled data (units may differ from wire-format units)
         self._freq_display: np.ndarray = np.array([], dtype=np.float64)
@@ -699,6 +700,8 @@ class AFMMainWindow(QMainWindow):
             self.conn_led.set_color(RED)
             self.conn_label.setText("Disconnected")
             self.conn_label.setStyleSheet(f"background: transparent; color: {RED}; font-weight: bold;")
+            self.board_available = False
+            self.board_panel.setToolTip("")
 
         self._set_controls_enabled(connected)
 
@@ -708,23 +711,25 @@ class AFMMainWindow(QMainWindow):
 
     def _set_controls_enabled(self, enabled: bool):
         """Enable or disable every command entry point in one place."""
-        for btn in [self.init_hw_btn, self.measure_btn, self.refresh_status_btn]:
+        self._controls_enabled = enabled
+        for btn in [self.init_hw_btn, self.measure_btn, self.refresh_status_btn,
+                    self.mux_set_btn, self.mux_disc_btn, self.gain_set_btn,
+                    self.board_status_btn, self.board_reset_btn]:
             btn.setEnabled(enabled)
-        for btn in [self.mux_set_btn, self.mux_disc_btn, self.gain_set_btn,
-                    self.board_status_btn, self.board_reset_btn, self.schematic_btn]:
-            btn.setEnabled(enabled)
+        self._apply_board_enabled()
 
-        self.board_panel.setEnabled(enabled and self.board_available)
-        if not enabled:
-            self.board_available = False
-            self.board_panel.setToolTip("")
+    def _apply_board_enabled(self):
+        """Board controls follow the global enable state and board presence."""
+        enabled = self._controls_enabled and self.board_available
+        self.board_panel.setEnabled(enabled)
+        self.schematic_btn.setEnabled(enabled)
 
     def _update_board_controls(self, status):
         """Enable board controls only while an electronic board is usable."""
         rp_only = status.mode == OperatingMode.RP_ONLY
         self.board_available = (status.hardware_initialized and status.board_connected
                                 and not rp_only)
-        self.board_panel.setEnabled(self.board_available)
+        self._apply_board_enabled()
 
         if rp_only:
             reason = "Electronic board disabled (server started in RP-only mode)"

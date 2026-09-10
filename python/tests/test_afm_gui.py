@@ -67,17 +67,40 @@ class GuiSmokeTests(unittest.TestCase):
         dialog.close()
 
     def test_rp_only_disables_board_panel(self):
+        self.window._set_controls_enabled(True)
         status = SystemStatus.from_response("HW_INIT=1 BOARD=0 DEC=64 MODE=RP_ONLY")
         self.window._update_board_controls(status)
         self.assertFalse(self.window.board_panel.isEnabled())
+        self.assertFalse(self.window.schematic_btn.isEnabled())
         self.assertFalse(self.window.board_available)
         self.assertIn("RP-only", self.window.board_panel.toolTip())
 
     def test_connected_board_enables_board_panel(self):
+        self.window._set_controls_enabled(True)
         status = SystemStatus.from_response("HW_INIT=1 BOARD=1 DEC=64 MODE=FULL")
         self.window._update_board_controls(status)
         self.assertTrue(self.window.board_panel.isEnabled())
+        self.assertTrue(self.window.schematic_btn.isEnabled())
         self.assertTrue(self.window.board_available)
+
+    def test_board_panel_restored_after_measure_error(self):
+        self.window._set_controls_enabled(True)
+        status = SystemStatus.from_response("HW_INIT=1 BOARD=1 DEC=64 MODE=FULL")
+        self.window._update_board_controls(status)
+
+        self.window._set_controls_enabled(False)
+        self.assertFalse(self.window.board_panel.isEnabled())
+
+        self.window._set_controls_enabled(True)
+        self.assertTrue(self.window.board_panel.isEnabled())
+
+    def test_update_board_controls_respects_disabled_state(self):
+        self.window._set_controls_enabled(False)
+        status = SystemStatus.from_response("HW_INIT=1 BOARD=1 DEC=64 MODE=FULL")
+        self.window._update_board_controls(status)
+        self.assertTrue(self.window.board_available)
+        self.assertFalse(self.window.board_panel.isEnabled())
+        self.assertFalse(self.window.schematic_btn.isEnabled())
 
     def test_peak_detection_and_display(self):
         freq = np.linspace(100.0, 200.0, 256)
