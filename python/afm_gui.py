@@ -742,6 +742,11 @@ class AFMMainWindow(QMainWindow):
         self.board_panel.setToolTip(reason)
         self.schematic_btn.setToolTip(reason)
 
+    def _sync_connection_ui(self):
+        """Reflect the offline state if a command lost the connection."""
+        if not self.client.is_connected:
+            self._update_connection_ui(False)
+
     # ---------------------------------------------------------------
     # Status & Initialization
     # ---------------------------------------------------------------
@@ -751,6 +756,7 @@ class AFMMainWindow(QMainWindow):
             self.statusBar().showMessage(f"Hardware initialization: {result}")
             self._on_refresh_status()
         except AFMError as exc:
+            self._sync_connection_ui()
             self.statusBar().showMessage(f"Hardware init error: {exc}")
 
     def _on_refresh_status(self):
@@ -775,6 +781,7 @@ class AFMMainWindow(QMainWindow):
         except AFMBusyError:
             self.statusBar().showMessage("Status refresh skipped: client busy")
         except AFMError as exc:
+            self._sync_connection_ui()
             self.statusBar().showMessage(f"Status error: {exc}")
 
     # ---------------------------------------------------------------
@@ -787,6 +794,7 @@ class AFMMainWindow(QMainWindow):
             self.client.set_mux(out, inp)
             self.statusBar().showMessage(f"MUX: Input {inp} -> Output {out}")
         except AFMError as exc:
+            self._sync_connection_ui()
             self.statusBar().showMessage(f"MUX error: {exc}")
 
     def _on_mux_disconnect(self):
@@ -795,6 +803,7 @@ class AFMMainWindow(QMainWindow):
             self.client.disconnect_mux(out)
             self.statusBar().showMessage(f"MUX: Output {out} disconnected")
         except AFMError as exc:
+            self._sync_connection_ui()
             self.statusBar().showMessage(f"MUX error: {exc}")
 
     def _on_gain_set(self):
@@ -804,6 +813,7 @@ class AFMMainWindow(QMainWindow):
             result = self.client.set_gain(ch, idx)
             self.statusBar().showMessage(f"Gain: Channel {ch} set to x{result}")
         except AFMError as exc:
+            self._sync_connection_ui()
             self.statusBar().showMessage(f"Gain error: {exc}")
 
     def _on_board_status(self):
@@ -811,6 +821,7 @@ class AFMMainWindow(QMainWindow):
             result = self.client.get_board_status()
             QMessageBox.information(self, "Board Status", result)
         except AFMError as exc:
+            self._sync_connection_ui()
             self.statusBar().showMessage(f"Board status error: {exc}")
 
     def _on_open_schematic(self):
@@ -831,6 +842,7 @@ class AFMMainWindow(QMainWindow):
                 result = self.client.reset_board()
                 self.statusBar().showMessage(f"Board reset: {result}")
             except AFMError as exc:
+                self._sync_connection_ui()
                 self.statusBar().showMessage(f"Board reset error: {exc}")
 
     # ---------------------------------------------------------------
