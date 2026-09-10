@@ -24,6 +24,12 @@ RedPitayaHardware::~RedPitayaHardware()
 
 bool RedPitayaHardware::initialize()
 {
+  if (m_memFd >= 0)
+  {
+    std::cerr << "Error: Hardware already initialized" << std::endl;
+    return false;
+  }
+
   // Open /dev/mem for memory-mapped I/O
   m_memFd = open("/dev/mem", O_RDWR | O_SYNC);
   if (m_memFd < 0)
@@ -81,12 +87,12 @@ void RedPitayaHardware::cleanup()
 
 uint32_t RedPitayaHardware::getVersion()
 {
-  return m_regs ? m_regs[REG_VERSION] : 0;
+  return _isMapped() ? m_regs[REG_VERSION] : 0;
 }
 
 bool RedPitayaHardware::loadGenerationSignal(const std::vector<float>& signal)
 {
-  if (signal.size() > MAX_SAMPLES)
+  if (!HardwareLimits::isValidSampleCount(signal.size()))
   {
     std::cerr << "Error: Signal too large (" << signal.size() << " > " << MAX_SAMPLES << ")"
               << std::endl;
@@ -102,7 +108,9 @@ bool RedPitayaHardware::loadGenerationSignal(const std::vector<float>& signal)
   uint32_t status = readStatusRegister();
   if (status & STATUS_BUSY_BIT)
   {
-    std::cerr << "Warning: Measurement in progress (FSM is RUNNING)." << std::endl;
+    std::cerr << "Error: Cannot load signal while a measurement is running (FSM is RUNNING)."
+              << std::endl;
+    return false;
   }
 
   // Clear stale sticky flags so denials caused by this transfer are visible.
@@ -126,15 +134,15 @@ bool RedPitayaHardware::loadGenerationSignal(const std::vector<float>& signal)
 
 bool RedPitayaHardware::startMeasurement(uint32_t numSamples, uint32_t delaySamples)
 {
-  if (numSamples > MAX_SAMPLES)
+  if (!HardwareLimits::isValidSampleCount(numSamples))
   {
     std::cerr << "Error: numSamples too large" << std::endl;
     return false;
   }
 
-  if (delaySamples > MAX_DELAY_SAMPLES)
+  if (!HardwareLimits::isValidDelaySamples(delaySamples))
   {
-    std::cerr << "Error: delaySamples exceeds " << MAX_DELAY_SAMPLES << std::endl;
+    std::cerr << "Error: delaySamples exceeds " << HardwareLimits::MAX_DELAY_SAMPLES << std::endl;
     return false;
   }
 
@@ -205,6 +213,13 @@ bool RedPitayaHardware::isMeasurementComplete()
 
 bool RedPitayaHardware::getAcquiredSignal(std::vector<float>& signal)
 {
+  if (!HardwareLimits::isValidSampleCount(signal.size()))
+  {
+    std::cerr << "Error: Signal too large (" << signal.size() << " > " << MAX_SAMPLES << ")"
+              << std::endl;
+    return false;
+  }
+
   if (!_isMapped())
   {
     std::cerr << "Error: Hardware not initialized" << std::endl;
@@ -234,11 +249,11 @@ bool RedPitayaHardware::getAcquiredSignal(std::vector<float>& signal)
     return false;
   }
 
-  // The RTL currently clears count_measure when acquisition stops, so a zero
-  // count means "not available". Once the RTL latches the final count, this
-  // becomes a hard check against truncated acquisitions.
+  // A zero count means "not available": the RTL clears it when acquisition
+  // stops and its 16-bit counter wraps at exactly MAX_SAMPLES. Any other
+  // value must match the requested size.
   uint32_t acquiredCount = m_regs[REG_COUNT_MEASURE];
-  if (acquiredCount != 0 && acquiredCount != signal.size())
+  if (!HardwareLimits::isCountConsistent(acquiredCount, signal.size()))
   {
     std::cerr << "Error: Acquired sample count mismatch (expected " << signal.size()
               << ", got " << acquiredCount << ")" << std::endl;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "HardwareLimits.h"
+
 #include <cstdint>
 #include <vector>
 
@@ -36,7 +38,8 @@ public:
   virtual uint32_t readDelayRegister() = 0;  // Read back REG_DELAY to verify clamping
   virtual bool clearStatusRegister() = 0;    // Clear sticky STATUS flags
 
-  static constexpr uint32_t MAX_SAMPLES = 65536;      // 2^16 shared BRAM depth
+  // 2^16 shared BRAM depth, see HardwareLimits.h
+  static constexpr uint32_t MAX_SAMPLES = static_cast<uint32_t>(HardwareLimits::MAX_SAMPLES);
   static constexpr uint16_t DEFAULT_DECIMATION = 64;
 
   // STATUS register bit masks (read-only, at register address 0x24)

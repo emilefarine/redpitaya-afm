@@ -73,7 +73,4 @@ private:
   static constexpr std::size_t REG_WINDOW_SIZE = 4096UL;
   static constexpr std::size_t BRAM_WINDOW_SIZE =
       static_cast<std::size_t>(MAX_SAMPLES) * sizeof(uint32_t); // 256 KB
-
-  // measure_ctrl truncates the delay to delay_eff[17:0]; larger values alias.
-  static constexpr uint32_t MAX_DELAY_SAMPLES = (1u << 18) - 1;
 };
