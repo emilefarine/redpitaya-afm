@@ -342,7 +342,7 @@ inline std::string buildSpectrumResponse(const std::vector<SpectrumPoint>& spect
 struct VersionInfo
 {
   static constexpr int MAJOR = 2;
-  static constexpr int MINOR = 2;
+  static constexpr int MINOR = 3;
   static constexpr int PATCH = 0;
 
   static std::string toString()

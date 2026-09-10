@@ -219,5 +219,5 @@ TEST(ProtocolTest, ServerConfigConstants)
 
 TEST(ProtocolTest, VersionInfoToString)
 {
-  EXPECT_EQ(VersionInfo::toString(), "2.2.0");
+  EXPECT_EQ(VersionInfo::toString(), "2.3.0");
 }
