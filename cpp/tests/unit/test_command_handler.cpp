@@ -36,15 +36,43 @@ class CommandHandlerTest : public ::testing::Test
 protected:
   void SetUp() override
   {
-    m_hw = std::make_unique<MockRedPitayaHardware>();
-    m_board = std::make_unique<MockElectronicBoard>();
-    m_rawHw = m_hw.get();
-    m_rawBoard = m_board.get();
+    m_nextHw = std::make_unique<MockRedPitayaHardware>();
+    m_nextBoard = std::make_unique<MockElectronicBoard>();
+    m_rawHw = m_nextHw.get();
+    m_rawBoard = m_nextBoard.get();
 
     m_handler = std::make_unique<AFM::CommandHandler>(
-        [this]() -> std::unique_ptr<IRedPitayaHardware> { return std::move(m_hw); },
-        [this]() -> std::unique_ptr<IElectronicBoard> { return std::move(m_board); },
+        [this]() -> std::unique_ptr<IRedPitayaHardware>
+        {
+          if (!m_nextHw)
+          {
+            m_nextHw = std::make_unique<MockRedPitayaHardware>();
+          }
+          m_rawHw = m_nextHw.get();
+          return std::move(m_nextHw);
+        },
+        [this]() -> std::unique_ptr<IElectronicBoard>
+        {
+          if (!m_nextBoard)
+          {
+            m_nextBoard = std::make_unique<MockElectronicBoard>();
+          }
+          m_rawBoard = m_nextBoard.get();
+          return std::move(m_nextBoard);
+        },
         50);
+  }
+
+  MockRedPitayaHardware* stageHardware()
+  {
+    m_nextHw = std::make_unique<MockRedPitayaHardware>();
+    return m_nextHw.get();
+  }
+
+  MockElectronicBoard* stageBoard()
+  {
+    m_nextBoard = std::make_unique<MockElectronicBoard>();
+    return m_nextBoard.get();
   }
 
   void initHardware(bool boardConnected = true)
@@ -88,8 +116,8 @@ protected:
     return m_handler->handleCommand(AFM::parseLine(line));
   }
 
-  std::unique_ptr<MockRedPitayaHardware> m_hw;
-  std::unique_ptr<MockElectronicBoard> m_board;
+  std::unique_ptr<MockRedPitayaHardware> m_nextHw;
+  std::unique_ptr<MockElectronicBoard> m_nextBoard;
   MockRedPitayaHardware* m_rawHw = nullptr;
   MockElectronicBoard* m_rawBoard = nullptr;
   std::unique_ptr<AFM::CommandHandler> m_handler;
@@ -192,6 +220,56 @@ TEST_F(CommandHandlerTest, RstClearsState)
   EXPECT_NE(send("MEASURE:SINC 200,100").find("ERR_NOT_INIT"), std::string::npos);
 }
 
+TEST_F(CommandHandlerTest, InitTwiceReportsAlreadyInitialized)
+{
+  initHardware(true);
+
+  EXPECT_EQ(send("SYSTEM:INIT"), "OK Already initialized\n");
+}
+
+TEST_F(CommandHandlerTest, DeinitWhenNotInitializedReportsNotInitialized)
+{
+  EXPECT_EQ(send("SYSTEM:DEINIT"), "OK Not initialized\n");
+}
+
+TEST_F(CommandHandlerTest, DeinitCallsCleanupAndClose)
+{
+  initHardware(true);
+
+  EXPECT_CALL(*m_rawHw, cleanup()).Times(1);
+  EXPECT_CALL(*m_rawBoard, close()).Times(1);
+
+  EXPECT_EQ(send("SYSTEM:DEINIT").compare(0, 2, "OK"), 0);
+}
+
+TEST_F(CommandHandlerTest, RstCallsCleanupAndClose)
+{
+  initHardware(true);
+
+  EXPECT_CALL(*m_rawHw, cleanup()).Times(1);
+  EXPECT_CALL(*m_rawBoard, close()).Times(1);
+
+  EXPECT_EQ(send("*RST"), "OK\n");
+}
+
+TEST_F(CommandHandlerTest, ReinitAfterDeinitCreatesFreshHardware)
+{
+  initHardware(true);
+  EXPECT_EQ(send("SYSTEM:DEINIT").compare(0, 2, "OK"), 0);
+
+  MockRedPitayaHardware* hw2 = stageHardware();
+  MockElectronicBoard* board2 = stageBoard();
+  ON_CALL(*hw2, initialize()).WillByDefault(Return(true));
+  ON_CALL(*hw2, getDecimation()).WillByDefault(Return(128));
+  ON_CALL(*board2, initialize()).WillByDefault(Return(true));
+
+  std::string resp = send("SYSTEM:INIT");
+  EXPECT_EQ(resp.compare(0, 3, "OK "), 0) << resp;
+  EXPECT_EQ(m_rawHw, hw2);
+  EXPECT_EQ(m_rawBoard, board2);
+  EXPECT_NE(send("SYSTEM:STATUS?").find("DEC=128"), std::string::npos);
+}
+
 TEST_F(CommandHandlerTest, MeasSincRequiresArguments)
 {
   initHardware(true);
@@ -218,6 +296,93 @@ TEST_F(CommandHandlerTest, MeasSincValidatesCenterBandwidthAmplitude)
   EXPECT_NE(send("MEASURE:SINC 0,100").find("ERR_PARAM"), std::string::npos);
   EXPECT_NE(send("MEASURE:SINC 200,0").find("ERR_PARAM"), std::string::npos);
   EXPECT_NE(send("MEASURE:SINC 200,100,8192,64,1.5").find("ERR_PARAM"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, MeasSincRejectsEmptyArgumentWithoutShifting)
+{
+  initHardware(true);
+
+  EXPECT_CALL(*m_rawHw, setDecimation(_)).Times(0);
+
+  // Missing bandwidth must not shift 100 into the bandwidth position
+  std::string resp = send("MEASURE:SINC 200,,100");
+  EXPECT_NE(resp.find("ERR_SYNTAX"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, MeasSincRejectsSubHertzBandwidth)
+{
+  initHardware(true);
+
+  EXPECT_CALL(*m_rawHw, setDecimation(_)).Times(0);
+
+  // 0.0001 kHz = 0.1 Hz would truncate to 0 in the generator API
+  std::string resp = send("MEASURE:SINC 200,0.0001");
+  EXPECT_NE(resp.find("ERR_PARAM"), std::string::npos);
+  EXPECT_EQ(resp.find("Internal error"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, MeasSincSampleCountBoundaries)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(65536);
+
+  EXPECT_NE(send("MEASURE:SINC 200,100,65537").find("ERR_PARAM"), std::string::npos);
+
+  std::string resp = send("MEASURE:SINC 200,100,65536");
+  EXPECT_EQ(resp.compare(0, 3, "OK "), 0) << resp;
+}
+
+TEST_F(CommandHandlerTest, MeasSincDecimationBoundaries)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+
+  EXPECT_NE(send("MEASURE:SINC 200,100,8192,15").find("ERR_PARAM"), std::string::npos);
+  EXPECT_NE(send("MEASURE:SINC 200,100,8192,2048").find("ERR_PARAM"), std::string::npos);
+
+  // dec 16 -> Nyquist 3.9 MHz, dec 1024 -> 61 kHz; both bands stay below Nyquist
+  EXPECT_EQ(send("MEASURE:SINC 200,100,8192,16").compare(0, 3, "OK "), 0);
+  EXPECT_EQ(send("MEASURE:SINC 50,10,8192,1024").compare(0, 3, "OK "), 0);
+}
+
+TEST_F(CommandHandlerTest, MeasSincRejectsBandEdgeAtNyquist)
+{
+  initHardware(true);
+
+  EXPECT_CALL(*m_rawHw, setDecimation(_)).Times(0);
+
+  // dec 16 -> Nyquist exactly 3906.25 kHz; band edge 3900 + 12.5/2 = 3906.25
+  EXPECT_NE(send("MEASURE:SINC 3900,12.5,8192,16").find("ERR_PARAM"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, MeasSincSingleSampleReturnsParamError)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(1);
+
+  std::string resp = send("MEASURE:SINC 200,100,1");
+  EXPECT_NE(resp.find("ERR_PARAM"), std::string::npos);
+  EXPECT_EQ(resp.find("Internal error"), std::string::npos);
+  EXPECT_FALSE(m_handler->getStatus().measurementInProgress);
+}
+
+TEST_F(CommandHandlerTest, MeasSincNoBinsInRangeReturnsParamError)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(2);
+
+  // N=2, dec 16 -> only bins at 0 and 3.9 MHz; the 100 kHz band contains none
+  std::string resp = send("MEASURE:SINC 100,1,2,16");
+  EXPECT_NE(resp.find("ERR_PARAM"), std::string::npos);
+  EXPECT_EQ(resp.find("Internal error"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, MeasSincIgnoresExtraArguments)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(1024);
+
+  EXPECT_EQ(send("MEASURE:SINC 200,100,1024,64,1,99").compare(0, 3, "OK "), 0);
 }
 
 TEST_F(CommandHandlerTest, MeasSincHappyPathReturnsConsistentSpectrum)
@@ -415,6 +580,57 @@ TEST_F(CommandHandlerTest, SweepLastPointStaysBelowNyquist)
   EXPECT_FALSE(m_handler->getStatus().measurementInProgress);
 }
 
+TEST_F(CommandHandlerTest, SweepSinglePointSucceeds)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+
+  std::string resp = send("MEASURE:SWEEP 200,0.1,1"); // start 199.95, stop 200.05
+  ASSERT_EQ(resp.compare(0, 3, "OK "), 0) << resp;
+
+  size_t count = 0;
+  size_t bytes = 0;
+  ASSERT_TRUE(parseDataHeader(resp, count, bytes));
+  EXPECT_EQ(count, 1u);
+  EXPECT_NE(resp.find("199.950"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, SweepClampsStartToZero)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+
+  std::string resp = send("MEASURE:SWEEP 0.2,1,1"); // start clamped to 0, stop 0.7
+  ASSERT_EQ(resp.compare(0, 3, "OK "), 0) << resp;
+
+  size_t count = 0;
+  size_t bytes = 0;
+  ASSERT_TRUE(parseDataHeader(resp, count, bytes));
+  EXPECT_EQ(count, 1u);
+  EXPECT_NE(resp.find("0.000"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, SweepMidLoopFailureResetsAndClearsBusy)
+{
+  initHardware(true);
+
+  EXPECT_CALL(*m_rawHw, setDecimation(_)).WillOnce(Return(true));
+  EXPECT_CALL(*m_rawHw, loadGenerationSignal(_)).Times(2).WillRepeatedly(Return(true));
+  EXPECT_CALL(*m_rawHw, startMeasurement(_, _)).WillOnce(Return(true)).WillOnce(Return(false));
+  EXPECT_CALL(*m_rawHw, isMeasurementComplete()).WillOnce(Return(true));
+  EXPECT_CALL(*m_rawHw, getAcquiredSignal(_))
+      .WillOnce(WithArg<0>(Invoke([](std::vector<float>& s) {
+        s.assign(8192, 0.0f);
+        return true;
+      })));
+  EXPECT_CALL(*m_rawHw, resetMeasurement()).Times(AtLeast(1)).WillRepeatedly(Return(true));
+
+  std::string resp = send("MEASURE:SWEEP 200,1,1"); // 2 points, second start fails
+  EXPECT_NE(resp.find("ERR_HARDWARE"), std::string::npos);
+  EXPECT_NE(resp.find("Failed to start measurement"), std::string::npos);
+  EXPECT_FALSE(m_handler->getStatus().measurementInProgress);
+}
+
 TEST_F(CommandHandlerTest, ExceptionFromHardwareClearsBusyFlag)
 {
   initHardware(true);
@@ -516,6 +732,61 @@ TEST_F(CommandHandlerTest, BoardResetAndStatusForwardToBoard)
       }));
   std::string resp = send("BOARD:STATUS?");
   EXPECT_NE(resp.find("OUT1->IN1 GAIN x2"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, BoardMuxDisconnectRejectsOutOfRangeChannel)
+{
+  initHardware(true);
+  EXPECT_NE(send("BOARD:MUX:DISCONNECT 0").find("ERR_PARAM"), std::string::npos);
+  EXPECT_NE(send("BOARD:MUX:DISCONNECT 5").find("ERR_PARAM"), std::string::npos);
+  EXPECT_NE(send("BOARD:MUX:DISCONNECT").find("ERR_SYNTAX"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, BoardMuxRouteFailurePropagatesError)
+{
+  initHardware(true);
+
+  static const std::string c_Error = "mux relay stuck";
+  EXPECT_CALL(*m_rawBoard, setMuxRoute(_, _)).WillOnce(Return(false));
+  ON_CALL(*m_rawBoard, getLastError()).WillByDefault(ReturnRef(c_Error));
+
+  std::string resp = send("BOARD:MUX:ROUTE 1,2");
+  EXPECT_NE(resp.find("ERR_HARDWARE"), std::string::npos);
+  EXPECT_NE(resp.find("mux relay stuck"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, BoardResetFailurePropagatesError)
+{
+  initHardware(true);
+
+  static const std::string c_Error = "reset line low";
+  EXPECT_CALL(*m_rawBoard, reset()).WillOnce(Return(false));
+  ON_CALL(*m_rawBoard, getLastError()).WillByDefault(ReturnRef(c_Error));
+
+  std::string resp = send("BOARD:RESET");
+  EXPECT_NE(resp.find("ERR_HARDWARE"), std::string::npos);
+  EXPECT_NE(resp.find("reset line low"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, BoardStatusFailurePropagatesError)
+{
+  initHardware(true);
+
+  static const std::string c_Error = "status timeout";
+  EXPECT_CALL(*m_rawBoard, getStatus(_)).WillOnce(Return(false));
+  ON_CALL(*m_rawBoard, getLastError()).WillByDefault(ReturnRef(c_Error));
+
+  std::string resp = send("BOARD:STATUS?");
+  EXPECT_NE(resp.find("ERR_HARDWARE"), std::string::npos);
+  EXPECT_NE(resp.find("status timeout"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, BoardRejectsInvalidArgumentTypes)
+{
+  initHardware(true);
+  EXPECT_NE(send("BOARD:GAIN abc,3").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("BOARD:GAIN 1,x").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("BOARD:MUX:ROUTE 1.5,2").find("ERR_SYNTAX"), std::string::npos);
 }
 
 } // namespace

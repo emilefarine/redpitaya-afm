@@ -33,6 +33,11 @@ std::vector<float> SignalGenerator::generateSincSignal(uint32_t numSamples,
     throw std::invalid_argument("Number of samples must be positive");
   }
 
+  if (bandwidth == 0)
+  {
+    throw std::invalid_argument("Bandwidth must be positive");
+  }
+
   if (centralFreq >= m_samplingFrequency / 2)
   {
     throw std::invalid_argument("Central frequency must be less than Nyquist frequency");
@@ -77,6 +82,10 @@ std::vector<float> SignalGenerator::generateSineWave(uint32_t numSamples,
   if (numSamples == 0)
   {
     throw std::invalid_argument("Number of samples must be positive");
+  }
+  if (frequency < 0.0)
+  {
+    throw std::invalid_argument("Frequency must be non-negative");
   }
   if (frequency >= m_samplingFrequency / 2)
   {

@@ -18,6 +18,22 @@ ElectronicBoardUART::ElectronicBoardUART(const std::string& devicePath, uint32_t
     : m_devicePath(devicePath)
     , m_baudRate(baudRate)
     , m_fd(-1)
+    , m_lineBuffer(MAX_RECV_BUFFER)
+    , m_protocol(
+          [this](const std::string& data) -> bool
+          {
+            ssize_t written = write(m_fd, data.c_str(), data.length());
+            if (written != static_cast<ssize_t>(data.length()))
+            {
+              m_lastError = "Write failed: " + std::string(std::strerror(errno));
+              return false;
+            }
+            tcdrain(m_fd);
+            return true;
+          },
+          [this](std::string& line, uint32_t timeoutMs) -> bool
+          { return _readLine(line, timeoutMs); },
+          m_lastError)
 {
 }
 
@@ -46,7 +62,7 @@ bool ElectronicBoardUART::initialize()
 
   // Clear any pending data
   tcflush(m_fd, TCIOFLUSH);
-  m_recvBuffer.clear();
+  m_lineBuffer.clear();
 
   // Probe the board: send a command and check for a response.
   std::string probeResponse;
@@ -72,7 +88,7 @@ void ElectronicBoardUART::close()
     ::close(m_fd);
     m_fd = -1;
   }
-  m_recvBuffer.clear();
+  m_lineBuffer.clear();
 }
 
 bool ElectronicBoardUART::isConnected() const
@@ -221,108 +237,20 @@ bool ElectronicBoardUART::_sendCommand(const std::string& command,
   }
 
   // NOTE: We intentionally do NOT call tcflush() here.
-  // The persistent m_recvBuffer may contain valid data from a previous read
+  // The persistent line buffer may contain valid data from a previous read
   // that would be lost if we flushed the OS buffer.
-
-  // Send command with newline terminator
-  std::string cmdWithTerminator = command + "\n";
-  ssize_t written = write(m_fd, cmdWithTerminator.c_str(), cmdWithTerminator.length());
-
-  if (written != static_cast<ssize_t>(cmdWithTerminator.length()))
-  {
-    m_lastError = "Write failed: " + std::string(std::strerror(errno));
-    return false;
-  }
-
-  // Wait for data to be transmitted
-  tcdrain(m_fd);
-
-  // Read response lines, skipping any echo from the LPC1114.
-  // The board may echo the sent command before replying with OK or ERR:.
-  // For the STATUS command, collect multi-line data before the final OK.
-  bool isStatusCmd = (command == "STATUS");
-  std::string statusAccum;
-  bool statusHasData = false;
-
-  std::string line;
-  while (_readLine(line, timeoutMs))
-  {
-    // Success response
-    if (line.find("OK") == 0)
-    {
-      if (response)
-      {
-        if (isStatusCmd && statusHasData)
-        {
-          *response = statusAccum;
-        }
-        else
-        {
-          *response = line;
-        }
-      }
-      return true;
-    }
-
-    // Error response
-    if (line.find("ERR:") == 0)
-    {
-      m_lastError = line.substr(4);
-      return false;
-    }
-
-    // For STATUS command, accumulate non-OK/non-ERR lines as data
-    if (isStatusCmd)
-    {
-      if (statusHasData)
-      {
-        statusAccum += "\n" + line;
-      }
-      else
-      {
-        statusAccum = line;
-        statusHasData = true;
-      }
-      // Use shorter timeout for continuation lines
-      timeoutMs = 200;
-      continue;
-    }
-
-    // Otherwise, this is likely an echo of the sent command, skip it
-    // and use a shorter timeout for the actual response
-    timeoutMs = 500;
-  }
-
-  // If we get here, we timed out without receiving OK or ERR:
-  if (m_lastError.empty())
-  {
-    m_lastError = "No response from board";
-  }
-  return false;
+  return m_protocol.sendCommand(command, response, timeoutMs);
 }
 
 bool ElectronicBoardUART::_readLine(std::string& line, uint32_t timeoutMs)
 {
-  line.clear();
-
   auto startTime = std::chrono::steady_clock::now();
   auto timeout = std::chrono::milliseconds(timeoutMs);
 
   while (true)
   {
-    // First, check if we already have a complete line in the persistent buffer
-    size_t newlinePos = m_recvBuffer.find('\n');
-    if (newlinePos != std::string::npos)
+    if (m_lineBuffer.popLine(line))
     {
-      line = m_recvBuffer.substr(0, newlinePos);
-      m_recvBuffer.erase(0, newlinePos + 1);
-
-      // Remove trailing \r if present
-      if (!line.empty() && line.back() == '\r')
-      {
-        line.pop_back();
-      }
-
       // Skip empty lines (e.g., from \r\n sequences)
       if (!line.empty())
       {
@@ -382,13 +310,10 @@ bool ElectronicBoardUART::_readLine(std::string& line, uint32_t timeoutMs)
       continue;
     }
 
-    // Append to persistent buffer
-    m_recvBuffer.append(buffer, static_cast<size_t>(bytesRead));
-
-    if (m_recvBuffer.size() > MAX_RECV_BUFFER &&
-        m_recvBuffer.find('\n') == std::string::npos)
+    if (m_lineBuffer.append(buffer, static_cast<size_t>(bytesRead)) ==
+        LineBuffer::AppendResult::Overflow)
     {
-      m_recvBuffer.clear();
+      m_lineBuffer.clear();
       m_lastError = "Receive buffer overflow (no line terminator)";
       return false;
     }

@@ -88,6 +88,11 @@ std::vector<float> FFTProcessor::computePhaseSpectrum(
 
 std::vector<float> FFTProcessor::getFrequencyAxis(uint32_t numSamples) const
 {
+  if (numSamples == 0)
+  {
+    throw std::invalid_argument("Number of samples must be positive");
+  }
+
   std::vector<float> frequencies;
 
   // For real signals, we only need frequencies from 0 to Fs/2

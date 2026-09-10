@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -116,6 +117,130 @@ TEST_F(ResonanceAnalyzerTest, CalculateQFactorMatchesPeakOverBandwidth)
 
   float q = analyzer.calculateQFactor(mag, peakBin);
   EXPECT_NEAR(q, c_F0 / c_Bw3dB, 0.3f);
+}
+
+TEST_F(ResonanceAnalyzerTest, ZeroPeakGivesZeroQFactor)
+{
+  std::vector<float> mag(65, 0.0f);
+
+  EXPECT_FLOAT_EQ(analyzer.calculateQFactor(mag, 32), 0.0f);
+}
+
+TEST_F(ResonanceAnalyzerTest, PeakAtSpectrumEdgesIsFinite)
+{
+  std::vector<float> magFirst(65, 0.0f);
+  magFirst[0] = 1.0f;
+
+  std::vector<float> magLast(65, 0.0f);
+  magLast.back() = 1.0f;
+
+  EXPECT_TRUE(std::isfinite(analyzer.calculateQFactor(magFirst, 0)));
+  EXPECT_TRUE(std::isfinite(analyzer.calculateQFactor(magLast, magLast.size() - 1)));
+}
+
+TEST_F(ResonanceAnalyzerTest, SingleBinSpectrumIsFinite)
+{
+  std::vector<float> mag = {1.0f};
+  std::vector<float> phase = {0.0f};
+
+  auto res = analyzer.analyzeResonance(mag, phase, 0.0f, 100.0f);
+
+  EXPECT_TRUE(std::isfinite(res.peakFrequency));
+  EXPECT_FLOAT_EQ(res.peakFrequency, 0.0f);
+  EXPECT_FLOAT_EQ(res.bandwidth3dB, 0.0f);
+  EXPECT_FLOAT_EQ(res.qFactor, 0.0f);
+}
+
+TEST_F(ResonanceAnalyzerTest, FindPeakIndexEmptySpectrumReturnsZero)
+{
+  EXPECT_EQ(analyzer.findPeakIndex({}, 0.0f, 1000.0f), 0u);
+}
+
+TEST_F(ResonanceAnalyzerTest, FindPeakIndexBandAboveSpectrumClampsToLastBin)
+{
+  auto mag = makeLorentzianSpectrum();
+  uint32_t peak = analyzer.findPeakIndex(mag, 10.0e6f, 11.0e6f);
+  EXPECT_EQ(peak, static_cast<uint32_t>(mag.size() - 1));
+}
+
+TEST_F(ResonanceAnalyzerTest, FindPeakIndexBandBelowZeroClampsToFirstBin)
+{
+  auto mag = makeLorentzianSpectrum();
+  uint32_t peak = analyzer.findPeakIndex(mag, -5000.0f, -1000.0f);
+  EXPECT_EQ(peak, 0u);
+}
+
+TEST_F(ResonanceAnalyzerTest, FindPeakIndexInvertedBandStillFindsPeak)
+{
+  auto mag = makeLorentzianSpectrum();
+  uint32_t peak = analyzer.findPeakIndex(mag, c_F0 + 5000.0f, c_F0 - 5000.0f);
+  EXPECT_EQ(peak, static_cast<uint32_t>(std::lround(c_F0 / c_Df)));
+}
+
+TEST_F(ResonanceAnalyzerTest, FrequencyToBinClampsInvalidInputs)
+{
+  EXPECT_EQ(analyzer.frequencyToBin(-1000.0f, c_N), 0u);
+  EXPECT_EQ(analyzer.frequencyToBin(0.0f, c_N), 0u);
+  EXPECT_EQ(analyzer.frequencyToBin(1.0e30f, c_N), std::numeric_limits<uint32_t>::max());
+  EXPECT_EQ(analyzer.frequencyToBin(1000.0f, 0u), 0u);
+}
+
+TEST_F(ResonanceAnalyzerTest, FrequencyToBinNonFiniteReturnsZero)
+{
+  EXPECT_EQ(analyzer.frequencyToBin(std::nanf(""), c_N), 0u);
+  EXPECT_EQ(analyzer.frequencyToBin(std::numeric_limits<float>::infinity(), c_N), 0u);
+  EXPECT_EQ(analyzer.frequencyToBin(-std::numeric_limits<float>::infinity(), c_N), 0u);
+}
+
+TEST_F(ResonanceAnalyzerTest, CalculateQFactorRejectsEmptyAndOutOfRange)
+{
+  EXPECT_FLOAT_EQ(analyzer.calculateQFactor({}, 0), 0.0f);
+
+  std::vector<float> mag(16, 1.0f);
+  EXPECT_FLOAT_EQ(analyzer.calculateQFactor(mag, 16), 0.0f);
+}
+
+TEST_F(ResonanceAnalyzerTest, BinToFrequencyZeroSamplesReturnsZero)
+{
+  EXPECT_FLOAT_EQ(analyzer.binToFrequency(5, 0), 0.0f);
+}
+
+TEST_F(ResonanceAnalyzerTest, AnalyzeResonanceUsesConsistentBinWidth)
+{
+  // 5 bins -> N = 8 -> bin 2 sits at 250 Hz for fs = 1000
+  ResonanceAnalyzer small(1000.0);
+  std::vector<float> mag = {0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+  std::vector<float> phase = {0.0f, 0.0f, 0.5f, 0.0f, 0.0f};
+
+  auto res = small.analyzeResonance(mag, phase, 250.0f, 200.0f);
+
+  EXPECT_FLOAT_EQ(res.peakFrequency, 250.0f);
+  EXPECT_FLOAT_EQ(res.peakAmplitude, 1.0f);
+  EXPECT_FLOAT_EQ(res.peakPhase, 0.5f);
+  EXPECT_FLOAT_EQ(res.centerFrequency, 250.0f);
+}
+
+TEST_F(ResonanceAnalyzerTest, AnalyzeResonanceClampsBandAboveSpectrum)
+{
+  auto mag = makeLorentzianSpectrum();
+  std::vector<float> phase(mag.size(), 0.0f);
+
+  auto res = analyzer.analyzeResonance(mag, phase, 10.0e6f, 1000.0f);
+
+  EXPECT_FLOAT_EQ(res.peakFrequency, analyzer.binToFrequency(mag.size() - 1, c_N));
+  EXPECT_TRUE(std::isfinite(res.qFactor));
+}
+
+TEST_F(ResonanceAnalyzerTest, AnalyzeResonanceClampsNegativeBand)
+{
+  std::vector<float> mag(65, 0.0f);
+  mag[0] = 1.0f;
+  std::vector<float> phase(65, 0.0f);
+
+  auto res = analyzer.analyzeResonance(mag, phase, -5000.0f, 1000.0f);
+
+  EXPECT_FLOAT_EQ(res.peakFrequency, 0.0f);
+  EXPECT_TRUE(std::isfinite(res.bandwidth3dB));
 }
 
 TEST_F(ResonanceAnalyzerTest, AnalyzeResonanceRejectsInvalidSpectra)

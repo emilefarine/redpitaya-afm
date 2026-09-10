@@ -190,6 +190,10 @@ struct ParsedCommand
       return false;
     }
     const std::string& s = args[index];
+    if (s.empty())
+    {
+      return false;
+    }
     char* end = nullptr;
     value = std::strtof(s.c_str(), &end);
     return end == s.c_str() + s.size() && std::isfinite(value);
@@ -260,18 +264,21 @@ inline ParsedCommand parseLine(const std::string& line)
 
   result.command = parseCommand(keyword);
 
-  // Parse comma-separated arguments, trimming whitespace around each
+  // Parse comma-separated arguments, trimming whitespace around each.
+  // Empty tokens are preserved so argument positions never shift.
   if (!argPortion.empty())
   {
-    std::istringstream iss(argPortion);
-    std::string token;
-    while (std::getline(iss, token, ','))
+    size_t start = 0;
+    while (true)
     {
-      std::string trimmed = trim(token);
-      if (!trimmed.empty())
+      size_t commaPos = argPortion.find(',', start);
+      if (commaPos == std::string::npos)
       {
-        result.args.push_back(trimmed);
+        result.args.push_back(trim(argPortion.substr(start)));
+        break;
       }
+      result.args.push_back(trim(argPortion.substr(start, commaPos - start)));
+      start = commaPos + 1;
     }
   }
 

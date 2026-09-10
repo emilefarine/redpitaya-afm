@@ -11,6 +11,7 @@ SIGNAL_LDLIBS = -lfftw3f -lm -lstdc++
 CXXFLAGS  = -std=c++17 -Wall -O2
 CXXFLAGS += -I$(RP_INCLUDE)
 CXXFLAGS += -I$(RP_INCLUDE)/api250-12
+CXXFLAGS += -ICommon            # Add Common folder to include path
 CXXFLAGS += -ISignalProcessing  # Add SignalProcessing folder to include path
 CXXFLAGS += -IHardware          # Add Hardware folder to include path
 
@@ -60,24 +61,29 @@ HOST_UNITTEST   = $(HOST_BUILD_DIR)/unit_tests.exe
 HOST_SRCS  = $(SIGNAL_DIR)/SignalGenerator.cpp \
              $(SIGNAL_DIR)/FFTProcessor.cpp \
              $(SIGNAL_DIR)/ResonanceAnalyzer.cpp \
-             $(SERVER_DIR)/CommandHandler.cpp
+             $(HARDWARE_DIR)/BoardProtocol.cpp \
+             $(SERVER_DIR)/CommandHandler.cpp \
+             $(SERVER_DIR)/ServerOptions.cpp
 
 HOST_OBJS      = $(patsubst $(SIGNAL_DIR)/%.cpp,$(HOST_OBJ_DIR)/%.o,$(filter $(SIGNAL_DIR)/%,$(HOST_SRCS))) \
+                 $(patsubst $(HARDWARE_DIR)/%.cpp,$(HOST_OBJ_DIR)/%.o,$(filter $(HARDWARE_DIR)/%,$(HOST_SRCS))) \
                  $(patsubst $(SERVER_DIR)/%.cpp,$(HOST_OBJ_DIR)/%.o,$(filter $(SERVER_DIR)/%,$(HOST_SRCS)))
 UNITTEST_SRCS  = $(wildcard $(UNITTEST_DIR)/*.cpp)
 
 HOST_CXXFLAGS = -std=c++17 -Wall -Wextra -g -O0 --coverage \
-                -I$(SIGNAL_DIR) -I$(HARDWARE_DIR) -IServer -Itests
+                -ICommon -I$(SIGNAL_DIR) -I$(HARDWARE_DIR) -IServer -Itests
 HOST_LDLIBS   = -lgtest_main -lgmock -lgtest -lfftw3f -lpthread
 
 # Signal processing library objects (in SignalProcessing folder)
 SIGNAL_PROCESSING_OBJS = $(SIGNAL_DIR)/SignalGenerator.o $(SIGNAL_DIR)/FFTProcessor.o $(SIGNAL_DIR)/ResonanceAnalyzer.o
 
 # Hardware abstraction layer objects (in Hardware folder)
-HARDWARE_OBJS = $(HARDWARE_DIR)/RedPitayaHardware.o $(HARDWARE_DIR)/ElectronicBoardUART.o
+HARDWARE_OBJS = $(HARDWARE_DIR)/RedPitayaHardware.o $(HARDWARE_DIR)/ElectronicBoardUART.o \
+                $(HARDWARE_DIR)/BoardProtocol.o
 
 # Server objects (in Server folder)
-SERVER_OBJS = $(SERVER_DIR)/TCPServer.o $(SERVER_DIR)/CommandHandler.o $(SERVER_DIR)/HardwareFactories.o
+SERVER_OBJS = $(SERVER_DIR)/TCPServer.o $(SERVER_DIR)/CommandHandler.o $(SERVER_DIR)/HardwareFactories.o \
+              $(SERVER_DIR)/ServerOptions.o
 
 # OLED display objects (in Hardware folder)
 OLED_OBJS = $(HARDWARE_DIR)/SSD1306.o
@@ -133,6 +139,9 @@ $(HOST_BUILD_DIR):
 $(HOST_OBJ_DIR)/%.o: $(SIGNAL_DIR)/%.cpp | $(HOST_OBJ_DIR)
 	$(HOST_CXX) -c $< $(HOST_CXXFLAGS) -o $@
 
+$(HOST_OBJ_DIR)/%.o: $(HARDWARE_DIR)/%.cpp | $(HOST_OBJ_DIR)
+	$(HOST_CXX) -c $< $(HOST_CXXFLAGS) -o $@
+
 $(HOST_OBJ_DIR)/%.o: $(SERVER_DIR)/%.cpp | $(HOST_OBJ_DIR)
 	$(HOST_CXX) -c $< $(HOST_CXXFLAGS) -o $@
 
@@ -143,17 +152,55 @@ $(HOST_UNITTEST): $(HOST_OBJS) $(UNITTEST_SRCS) | $(HOST_BUILD_DIR)
 test_host: $(HOST_UNITTEST)
 	$(HOST_UNITTEST)
 
+# Sanitizer-enabled host tests (Linux/macOS; ASan is unreliable under MSYS2)
+HOST_SAN_BUILD_DIR = out/host-san
+HOST_SAN_OBJ_DIR   = $(HOST_SAN_BUILD_DIR)/obj
+HOST_SAN_UNITTEST  = $(HOST_SAN_BUILD_DIR)/unit_tests_san.exe
+
+HOST_SAN_FLAGS  = -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined
+HOST_SAN_CXXFLAGS = $(filter-out --coverage,$(HOST_CXXFLAGS)) $(HOST_SAN_FLAGS)
+
+HOST_SAN_OBJS = $(patsubst $(SIGNAL_DIR)/%.cpp,$(HOST_SAN_OBJ_DIR)/%.o,$(filter $(SIGNAL_DIR)/%,$(HOST_SRCS))) \
+                $(patsubst $(HARDWARE_DIR)/%.cpp,$(HOST_SAN_OBJ_DIR)/%.o,$(filter $(HARDWARE_DIR)/%,$(HOST_SRCS))) \
+                $(patsubst $(SERVER_DIR)/%.cpp,$(HOST_SAN_OBJ_DIR)/%.o,$(filter $(SERVER_DIR)/%,$(HOST_SRCS)))
+
+$(HOST_SAN_BUILD_DIR):
+	mkdir -p $(HOST_SAN_BUILD_DIR)
+
+$(HOST_SAN_OBJ_DIR):
+	mkdir -p $(HOST_SAN_OBJ_DIR)
+
+$(HOST_SAN_OBJ_DIR)/%.o: $(SIGNAL_DIR)/%.cpp | $(HOST_SAN_OBJ_DIR)
+	$(HOST_CXX) -c $< $(HOST_SAN_CXXFLAGS) -o $@
+
+$(HOST_SAN_OBJ_DIR)/%.o: $(HARDWARE_DIR)/%.cpp | $(HOST_SAN_OBJ_DIR)
+	$(HOST_CXX) -c $< $(HOST_SAN_CXXFLAGS) -o $@
+
+$(HOST_SAN_OBJ_DIR)/%.o: $(SERVER_DIR)/%.cpp | $(HOST_SAN_OBJ_DIR)
+	$(HOST_CXX) -c $< $(HOST_SAN_CXXFLAGS) -o $@
+
+$(HOST_SAN_UNITTEST): $(HOST_SAN_OBJS) $(UNITTEST_SRCS) | $(HOST_SAN_BUILD_DIR)
+	$(HOST_CXX) $(UNITTEST_SRCS) $(HOST_SAN_OBJS) $(HOST_SAN_CXXFLAGS) $(HOST_LDLIBS) -o $@
+
+# Build and run host unit tests under AddressSanitizer and UBSan
+test_host_san: $(HOST_SAN_UNITTEST)
+	$(HOST_SAN_UNITTEST)
+
 # Run host unit tests and generate HTML coverage report
 coverage: $(HOST_UNITTEST)
 	$(RM) $(HOST_OBJ_DIR)/*.gcda $(HOST_BUILD_DIR)/*.gcda
 	$(HOST_UNITTEST)
 	mkdir -p $(HOST_COV_DIR)
-	gcovr --root . --filter $(SIGNAL_DIR)/ --filter Server/ --filter Hardware/DacCodec.h \
+	gcovr --root . --filter $(SIGNAL_DIR)/ --filter Server/ --filter Common/ --filter Hardware/ \
 	      --print-summary --html-details $(HOST_COV_DIR)/index.html
 
 # Remove host test build artifacts (objects, coverage data, reports)
 clean_host:
 	rm -rf $(HOST_BUILD_DIR)
+
+# Remove sanitizer test build artifacts
+clean_host_san:
+	rm -rf $(HOST_SAN_BUILD_DIR)
 
 
 # Clean object files
@@ -180,11 +227,13 @@ help:
 	@echo "  server                    - Build AFM server"
 	@echo "  tools                     - Build tool programs (oled_ip)"
 	@echo "  test_host                 - Run host unit tests (no RedPitaya needed)"
+	@echo "  test_host_san             - Host unit tests under ASan/UBSan (Linux/macOS)"
 	@echo "  coverage                  - Host unit tests + HTML coverage report"
 	@echo "                              (out/host/coverage/index.html)"
 	@echo "  clean                     - Remove object files"
 	@echo "  clean_all                 - Remove all generated files"
 	@echo "  clean_host                - Remove host test build artifacts"
+	@echo "  clean_host_san            - Remove sanitizer test build artifacts"
 	@echo "  help                      - Show this help message"
 	@echo ""
 	@echo "Main programs:"
@@ -203,4 +252,4 @@ help:
 	@echo "  • Resonance detection (frequency, Q-factor, amplitude)"
 	@echo "  • CSV export for visualization"
 
-.PHONY: all server tools test_host coverage clean_host clean clean_all help
+.PHONY: all server tools test_host test_host_san coverage clean_host clean_host_san clean clean_all help

@@ -1,11 +1,11 @@
 #include "CommandHandler.h"
 #include "Protocol.h"
+#include "ServerOptions.h"
 #include "TCPServer.h"
 
 #include <atomic>
 #include <chrono>
 #include <csignal>
-#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -42,6 +42,17 @@ bool loadFpgaBitstream(const std::string& bitstreamPath)
   // Writing directly to /dev/xdevcfg is deprecated and can lead to "VERSION register = 0x0"
   std::cout << "[FPGA] Executing: fpgautil -b " << bitstreamPath << std::endl;
 
+  // Build the argv once before fork so the child performs no allocations.
+  std::vector<std::string> fpgautilArgs = AFM::buildFpgautilArgs(bitstreamPath);
+  std::vector<char*> fpgautilArgv;
+  fpgautilArgv.reserve(fpgautilArgs.size() + 2);
+  fpgautilArgv.push_back(nullptr); // argv[0], replaced per candidate in the child
+  for (const std::string& arg : fpgautilArgs)
+  {
+    fpgautilArgv.push_back(const_cast<char*>(arg.c_str()));
+  }
+  fpgautilArgv.push_back(nullptr);
+
   // Use fork/exec instead of std::system() to avoid shell injection vulnerabilities.
   // With the exec family, arguments are passed directly to the process without shell
   // interpretation, so shell metacharacters in bitstreamPath have no effect.
@@ -65,7 +76,8 @@ bool loadFpgaBitstream(const std::string& bitstreamPath)
 
     for (const char* candidate : c_FpgautilCandidates)
     {
-      execl(candidate, candidate, "-b", bitstreamPath.c_str(), nullptr);
+      fpgautilArgv[0] = const_cast<char*>(candidate);
+      execv(candidate, fpgautilArgv.data());
     }
 
     _exit(127);
@@ -131,72 +143,6 @@ void printUsage(const char* programName)
             << std::endl;
 }
 
-/**
- * @brief Parse command line arguments
- */
-bool parseArgs(int argc, char* argv[], uint16_t& port, std::string& bitstreamPath)
-{
-  port = AFM::ServerConfig::DEFAULT_PORT;
-  bitstreamPath = FPGA_BITSTREAM_PATH;
-
-  for (int i = 1; i < argc; ++i)
-  {
-    std::string arg = argv[i];
-
-    if (arg == "-h" || arg == "--help")
-    {
-      printUsage(argv[0]);
-      exit(0);
-    }
-    else if (arg == "-v" || arg == "--version")
-    {
-      std::cout << "AFM SCPI Server v" << AFM::VersionInfo::toString() << std::endl;
-      exit(0);
-    }
-    else if (arg == "-p" || arg == "--port")
-    {
-      if (i + 1 >= argc)
-      {
-        std::cerr << "Error: --port requires a value" << std::endl;
-        return false;
-      }
-      int portVal = std::atoi(argv[++i]);
-      if (portVal <= 0 || portVal > 65535)
-      {
-        std::cerr << "Error: Invalid port number: " << argv[i] << std::endl;
-        return false;
-      }
-      port = static_cast<uint16_t>(portVal);
-    }
-    else if (arg == "-b" || arg == "--bitstream")
-    {
-      if (i + 1 >= argc)
-      {
-        std::cerr << "Error: --bitstream requires a path" << std::endl;
-        return false;
-      }
-      bitstreamPath = argv[++i];
-    }
-    else
-    {
-      // Try to parse as port number (legacy format)
-      int portVal = std::atoi(arg.c_str());
-      if (portVal > 0 && portVal <= 65535)
-      {
-        port = static_cast<uint16_t>(portVal);
-      }
-      else
-      {
-        std::cerr << "Error: Unknown option: " << arg << std::endl;
-        printUsage(argv[0]);
-        return false;
-      }
-    }
-  }
-
-  return true;
-}
-
 int main(int argc, char* argv[])
 {
   try
@@ -208,15 +154,32 @@ int main(int argc, char* argv[])
               << std::endl;
 
     // Parse command line arguments
-    uint16_t port;
-    std::string bitstreamPath;
-    if (!parseArgs(argc, argv, port, bitstreamPath))
+    AFM::ServerOptions options;
+    options.bitstreamPath = FPGA_BITSTREAM_PATH;
+
+    std::vector<std::string> args(argv + 1, argv + argc);
+    std::string parseError;
+    AFM::OptionsParseResult parseResult = AFM::parseServerOptions(args, options, parseError);
+
+    if (parseResult == AFM::OptionsParseResult::Help)
     {
+      printUsage(argv[0]);
+      return 0;
+    }
+    if (parseResult == AFM::OptionsParseResult::Version)
+    {
+      std::cout << "AFM SCPI Server v" << AFM::VersionInfo::toString() << std::endl;
+      return 0;
+    }
+    if (parseResult == AFM::OptionsParseResult::Error)
+    {
+      std::cerr << "Error: " << parseError << std::endl;
+      printUsage(argv[0]);
       return 1;
     }
 
     // Load FPGA bitstream
-    if (!loadFpgaBitstream(bitstreamPath))
+    if (!loadFpgaBitstream(options.bitstreamPath))
     {
       std::cerr << "[Error] FPGA bitstream loading failed." << std::endl;
       return 1;
@@ -230,13 +193,13 @@ int main(int argc, char* argv[])
     auto commandHandler = std::make_unique<AFM::CommandHandler>();
 
     // Create TCP server
-    AFM::TCPServer server(port);
+    AFM::TCPServer server(options.port);
 
     // Set command callback
     server.setCommandHandler([&commandHandler](const AFM::ParsedCommand& cmd)
                              { return commandHandler->handleCommand(cmd); });
 
-    std::cout << "[Main] Starting server on port " << port << "...\n" << std::endl;
+    std::cout << "[Main] Starting server on port " << options.port << "...\n" << std::endl;
 
     // Start server asynchronously so main thread can monitor shutdown signal
     if (!server.startAsync())

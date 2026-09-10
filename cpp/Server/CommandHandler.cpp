@@ -472,6 +472,11 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
   double bandwidthHz = bandwidthKHz * 1000.0;
   double nyquistHz = ServerConfig::ADC_SAMPLE_RATE_HZ / (2.0 * dec);
 
+  if (bandwidthHz < 1.0)
+  {
+    return buildErrorResponse(ResponseStatus::ERR_PARAM, "bandwidth must be at least 1 Hz");
+  }
+
   if (centerHz + bandwidthHz / 2.0 >= nyquistHz)
   {
     std::ostringstream oss;

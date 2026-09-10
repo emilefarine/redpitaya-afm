@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <vector>
@@ -32,6 +33,59 @@ TEST(FftProcessorTest, ComputeFftRejectsEmptyInput)
 {
   FFTProcessor fft(c_Fs);
   EXPECT_THROW(fft.computeFFT({}), std::invalid_argument);
+}
+
+TEST(FftProcessorTest, MagnitudeAndPhaseOfEmptyAreEmpty)
+{
+  FFTProcessor fft(c_Fs);
+  EXPECT_TRUE(fft.computeMagnitudeSpectrum({}).empty());
+  EXPECT_TRUE(fft.computePhaseSpectrum({}).empty());
+}
+
+TEST(FftProcessorTest, UnknownWindowTypeThrows)
+{
+  FFTProcessor fft(c_Fs);
+  std::vector<float> sig(16, 1.0f);
+  EXPECT_THROW(fft.applyWindow(sig, static_cast<WindowType>(99)), std::invalid_argument);
+}
+
+TEST(FftProcessorTest, ApplyWindowTwoSamplesIsFinite)
+{
+  FFTProcessor fft(c_Fs);
+
+  for (WindowType type : {WindowType::Hann, WindowType::Hamming, WindowType::Blackman})
+  {
+    std::vector<float> sig = {1.0f, 1.0f};
+    fft.applyWindow(sig, type);
+    for (float v : sig)
+      EXPECT_TRUE(std::isfinite(v));
+  }
+}
+
+TEST(FftProcessorTest, NonPowerOfTwoFftFindsPeak)
+{
+  const uint32_t N = 1000;
+  const uint32_t bin = 50;
+
+  FFTProcessor fft(c_Fs);
+  auto mag = fft.computeMagnitudeSpectrum(fft.computeFFT(makeSine(N, bin)));
+
+  size_t peakIdx = std::max_element(mag.begin() + 1, mag.end()) - mag.begin();
+  EXPECT_EQ(peakIdx, bin);
+  EXPECT_NEAR(mag[bin], 0.5f, 1e-3f);
+}
+
+TEST(FftProcessorTest, FrequencyAxisSpacingIsSamplingRateOverN)
+{
+  const uint32_t N = 512;
+  FFTProcessor fft(c_Fs);
+  auto axis = fft.getFrequencyAxis(N);
+  ASSERT_GT(axis.size(), 1u);
+
+  for (size_t i = 1; i < axis.size(); ++i)
+  {
+    EXPECT_NEAR(axis[i] - axis[i - 1], static_cast<float>(c_Fs / N), 1e-3f);
+  }
 }
 
 TEST(FftProcessorTest, PureSineGivesSinglePeakBin)
@@ -85,6 +139,12 @@ TEST(FftProcessorTest, FrequencyAxisMatchesSamplingTheorem)
   EXPECT_FLOAT_EQ(axis[0], 0.0f);
   EXPECT_NEAR(axis.back(), c_Fs / 2, 1.0f);
   EXPECT_NEAR(axis[10], 10.0 * c_Fs / N, 1e-3f);
+}
+
+TEST(FftProcessorTest, FrequencyAxisZeroSamplesThrows)
+{
+  FFTProcessor fft(c_Fs);
+  EXPECT_THROW(fft.getFrequencyAxis(0), std::invalid_argument);
 }
 
 TEST(FftProcessorTest, PlanReusedAcrossCallsAndSizes)

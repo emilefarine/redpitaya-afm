@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -16,6 +17,11 @@ TEST(ProtocolTest, CommandStringRoundTripCoversAllCommands)
     Command cmd = static_cast<Command>(v);
     EXPECT_EQ(parseCommand(commandToString(cmd)), cmd) << commandToString(cmd);
   }
+}
+
+TEST(ProtocolTest, CommandToStringUnknown)
+{
+  EXPECT_STREQ(commandToString(Command::UNKNOWN), "UNKNOWN");
 }
 
 TEST(ProtocolTest, ParseLineBasicCommands)
@@ -66,6 +72,19 @@ TEST(ProtocolTest, ParseLineSplitsAndTrimsArguments)
   EXPECT_EQ(gain.args[1], "3");
 }
 
+TEST(ProtocolTest, ParseLinePreservesEmptyArgumentPositions)
+{
+  auto cmd = parseLine("MEASURE:SINC 200,,100");
+  ASSERT_EQ(cmd.args.size(), 3u);
+  EXPECT_EQ(cmd.args[0], "200");
+  EXPECT_EQ(cmd.args[1], "");
+  EXPECT_EQ(cmd.args[2], "100");
+
+  auto trailing = parseLine("MEASURE:SINC 200,100,");
+  ASSERT_EQ(trailing.args.size(), 3u);
+  EXPECT_EQ(trailing.args[2], "");
+}
+
 TEST(ProtocolTest, ParseLineUnknownCommands)
 {
   EXPECT_EQ(parseLine("GARBAGE").command, Command::UNKNOWN);
@@ -99,6 +118,22 @@ TEST(ProtocolTest, GetArgIntRejectsInvalidValues)
     EXPECT_FALSE(cmd.getArgInt(i, value)) << "arg " << i;
 
   EXPECT_FALSE(cmd.getArgInt(10, value)); // out of range index
+}
+
+TEST(ProtocolTest, GetArgIntBoundaries)
+{
+  ParsedCommand cmd;
+  cmd.args = {"2147483647", "-2147483648", "2147483648", "-2147483649", "-", "+42"};
+
+  int value = 0;
+  EXPECT_TRUE(cmd.getArgInt(0, value));
+  EXPECT_EQ(value, std::numeric_limits<int>::max());
+  EXPECT_TRUE(cmd.getArgInt(1, value));
+  EXPECT_EQ(value, std::numeric_limits<int>::min());
+  EXPECT_FALSE(cmd.getArgInt(2, value));
+  EXPECT_FALSE(cmd.getArgInt(3, value));
+  EXPECT_FALSE(cmd.getArgInt(4, value));
+  EXPECT_FALSE(cmd.getArgInt(5, value)); // from_chars does not accept a leading '+'
 }
 
 TEST(ProtocolTest, GetArgFloatParsesValidValues)
@@ -137,6 +172,49 @@ TEST(ProtocolTest, GetArgFloatRejectsNonFiniteValues)
   float value = -1.0f;
   for (size_t i = 0; i < cmd.args.size(); ++i)
     EXPECT_FALSE(cmd.getArgFloat(i, value)) << "arg " << i << ": " << cmd.args[i];
+}
+
+TEST(ProtocolTest, GetArgFloatRejectsEmptyString)
+{
+  ParsedCommand cmd;
+  cmd.args = {""};
+
+  float value = -1.0f;
+  EXPECT_FALSE(cmd.getArgFloat(0, value));
+}
+
+TEST(ProtocolTest, GetArgFloatAcceptsCommonFormats)
+{
+  ParsedCommand cmd;
+  cmd.args = {".5", "5.", "+1e3"};
+
+  float value = 0.0f;
+  EXPECT_TRUE(cmd.getArgFloat(0, value));
+  EXPECT_FLOAT_EQ(value, 0.5f);
+  EXPECT_TRUE(cmd.getArgFloat(1, value));
+  EXPECT_FLOAT_EQ(value, 5.0f);
+  EXPECT_TRUE(cmd.getArgFloat(2, value));
+  EXPECT_FLOAT_EQ(value, 1000.0f);
+}
+
+TEST(ProtocolTest, GetArgFloatAcceptsHexFloat)
+{
+  ParsedCommand cmd;
+  cmd.args = {"0x1p3"};
+
+  float value = 0.0f;
+  EXPECT_TRUE(cmd.getArgFloat(0, value));
+  EXPECT_FLOAT_EQ(value, 8.0f);
+}
+
+TEST(ProtocolTest, GetArgFloatUnderflowBecomesZero)
+{
+  ParsedCommand cmd;
+  cmd.args = {"1e-9999"};
+
+  float value = -1.0f;
+  EXPECT_TRUE(cmd.getArgFloat(0, value));
+  EXPECT_FLOAT_EQ(value, 0.0f);
 }
 
 TEST(ProtocolTest, GetArgStringReturnsArgumentOrFails)
@@ -182,6 +260,11 @@ TEST(ProtocolTest, StatusToStringCoversStatuses)
   EXPECT_STREQ(statusToString(ResponseStatus::ERR_BUSY), "ERR_BUSY");
 }
 
+TEST(ProtocolTest, StatusToStringUnknownStatus)
+{
+  EXPECT_STREQ(statusToString(static_cast<ResponseStatus>(200)), "ERR_UNKNOWN");
+}
+
 TEST(ProtocolTest, BuildSpectrumResponseHeaderMatchesPayload)
 {
   std::vector<SpectrumPoint> pts = {
@@ -208,6 +291,11 @@ TEST(ProtocolTest, BuildSpectrumResponsePayloadFormat)
 
   std::string payload = resp.substr(resp.find('\n') + 1);
   EXPECT_EQ(payload, "100.000,1.000000e-03,0.500000\n");
+}
+
+TEST(ProtocolTest, BuildSpectrumResponseEmptySpectrum)
+{
+  EXPECT_EQ(buildSpectrumResponse({}), "OK DATA 0 0\n");
 }
 
 TEST(ProtocolTest, ServerConfigConstants)

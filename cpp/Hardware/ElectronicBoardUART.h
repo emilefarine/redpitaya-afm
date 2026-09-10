@@ -24,6 +24,8 @@
 #ifndef ELECTRONIC_BOARD_UART_H
 #define ELECTRONIC_BOARD_UART_H
 
+#include "BoardProtocol.h"
+#include "LineBuffer.h"
 #include "IElectronicBoard.h"
 
 #include <cstdint>
@@ -125,7 +127,8 @@ private:
   uint32_t m_baudRate;
   int m_fd; // File descriptor for UART
   std::string m_lastError;
-  std::string m_recvBuffer; // Persistent buffer for partial UART reads
+  LineBuffer m_lineBuffer;
+  BoardProtocol m_protocol;
 };
 
 #endif // ELECTRONIC_BOARD_UART_H

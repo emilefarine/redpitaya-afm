@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace
@@ -35,6 +36,17 @@ TEST(DacCodecTest, OutOfRangeVoltagesAreClamped)
 {
   EXPECT_EQ(DacCodec::voltageToDAC(5.0f), 8191);
   EXPECT_EQ(DacCodec::voltageToDAC(-5.0f), -8191);
+}
+
+TEST(DacCodecTest, NaNVoltageGivesZeroCode)
+{
+  EXPECT_EQ(DacCodec::voltageToDAC(std::nanf("")), 0);
+}
+
+TEST(DacCodecTest, InfiniteVoltagesClampToFullScale)
+{
+  EXPECT_EQ(DacCodec::voltageToDAC(std::numeric_limits<float>::infinity()), 8191);
+  EXPECT_EQ(DacCodec::voltageToDAC(-std::numeric_limits<float>::infinity()), -8191);
 }
 
 TEST(DacCodecTest, HalfScaleVoltage)
@@ -72,6 +84,27 @@ TEST(DacCodecTest, AdcNegativeValueWithPrecisionBits)
   uint32_t raw = packRaw(-100, 7, 64);
   float expected = -100.0f * c_LsbVoltage + (7.0f / 8.0f) * c_LsbVoltage;
   EXPECT_NEAR(DacCodec::adcToVoltage(raw, 64), expected, 1e-6f);
+}
+
+TEST(DacCodecTest, PrecisionBitBoundaryAtDecimation64)
+{
+  uint32_t rawLow = packRaw(100, 3, 63);  // 2 precision bits below decimation 64
+  uint32_t rawHigh = packRaw(100, 3, 64); // 3 precision bits at decimation 64
+
+  float low = DacCodec::adcToVoltage(rawLow, 63);
+  float high = DacCodec::adcToVoltage(rawHigh, 64);
+
+  EXPECT_NEAR(low, 100.0f * c_LsbVoltage + (3.0f / 4.0f) * c_LsbVoltage, 1e-6f);
+  EXPECT_NEAR(high, 100.0f * c_LsbVoltage + (3.0f / 8.0f) * c_LsbVoltage, 1e-6f);
+  EXPECT_GT(low, high);
+}
+
+TEST(DacCodecTest, ExtremeRawWordsAreFinite)
+{
+  for (uint32_t raw : {0u, 0xFFFFFFFFu, 0x00001FFFu, 0x00001FF0u})
+  {
+    EXPECT_TRUE(std::isfinite(DacCodec::adcToVoltage(raw, 64))) << "raw 0x" << std::hex << raw;
+  }
 }
 
 TEST(DacCodecTest, VoltageAdcRoundTripWithinTwoLsb)
