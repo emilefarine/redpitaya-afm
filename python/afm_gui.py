@@ -1,5 +1,7 @@
+import logging
 import sys
 import time
+
 import numpy as np
 
 from PyQt6.QtWidgets import (
@@ -14,10 +16,12 @@ from PyQt6.QtGui import QFont, QColor, QPainter, QIcon
 import pyqtgraph as pg
 
 from afm_client import (
-    AFMClient, AFMError, AFMConnectionError, AFMCommandError, AFMTimeoutError,
-    GainSetting, SpectrumData,
+    AFMClient, AFMError, AFMBusyError, SpectrumData,
 )
 from afm_schematic import RoutingSchematicDialog
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +213,9 @@ class MeasureWorker(QThread):
             self.finished.emit(result)
         except AFMError as exc:
             self.error.emit(str(exc))
+        except Exception as exc:
+            logger.exception("Measurement worker failed")
+            self.error.emit(f"Unexpected error: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -227,8 +234,11 @@ class ConnectWorker(QThread):
         try:
             welcome = self.client.connect()
             self.connected.emit(welcome)
-        except AFMConnectionError as exc:
+        except AFMError as exc:
             self.error.emit(str(exc))
+        except Exception as exc:
+            logger.exception("Connect worker failed")
+            self.error.emit(f"Unexpected error: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +258,7 @@ class AFMMainWindow(QMainWindow):
         self._measure_time = 0.0
         self._last_measure_mode = "sinc"
         self._pending_measure_mode = "sinc"
+        self._closing = False
 
         # Display-scaled data (units may differ from wire-format units)
         self._freq_display: np.ndarray = np.array([], dtype=np.float64)
@@ -658,11 +669,18 @@ class AFMMainWindow(QMainWindow):
         self._connect_worker.start()
 
     def _on_connected(self, welcome: str):
+        if self._closing:
+            return
         self._update_connection_ui(True)
         self.statusBar().showMessage(f"Connected - {welcome}")
         self._on_refresh_status()
+        dlg = getattr(self, "_schematic_dialog", None)
+        if dlg is not None:
+            dlg.refresh_state()
 
     def _on_connect_error(self, msg: str):
+        if self._closing:
+            return
         self._update_connection_ui(False)
         self.statusBar().showMessage(f"Connection failed: {msg}")
         QMessageBox.critical(self, "Connection Error", msg)
@@ -680,11 +698,18 @@ class AFMMainWindow(QMainWindow):
             self.conn_label.setText("Disconnected")
             self.conn_label.setStyleSheet(f"background: transparent; color: {RED}; font-weight: bold;")
 
-        # Enable/disable control panels
+        self._set_controls_enabled(connected)
+
+        dlg = getattr(self, "_schematic_dialog", None)
+        if dlg is not None:
+            dlg.set_client(self.client if connected else None)
+
+    def _set_controls_enabled(self, enabled: bool):
+        """Enable or disable every command entry point in one place."""
         for btn in [self.init_hw_btn, self.mux_set_btn, self.mux_disc_btn, self.gain_set_btn,
                      self.board_status_btn, self.board_reset_btn, self.schematic_btn,
                      self.measure_btn, self.refresh_status_btn]:
-            btn.setEnabled(connected)
+            btn.setEnabled(enabled)
 
     # ---------------------------------------------------------------
     # Status & Initialization
@@ -711,6 +736,8 @@ class AFMMainWindow(QMainWindow):
             for val_lbl, icon, color in zip(self.status_values, icons, colors):
                 val_lbl.setText(icon)
                 val_lbl.setStyleSheet(f"color: {color}; font-weight: bold;")
+        except AFMBusyError:
+            self.statusBar().showMessage("Status refresh skipped: client busy")
         except AFMError as exc:
             self.statusBar().showMessage(f"Status error: {exc}")
 
@@ -809,7 +836,7 @@ class AFMMainWindow(QMainWindow):
                     f"range={params['range']:.1f} kHz, "
                     f"step={params['step']:.2f} kHz")
 
-        self.measure_btn.setEnabled(False)
+        self._set_controls_enabled(False)
         self.measure_btn.setText("⏳ Measuring…")
         self.statusBar().showMessage(f"Measuring… {desc}")
         self._pending_measure_mode = mode
@@ -825,9 +852,11 @@ class AFMMainWindow(QMainWindow):
         self._measure_time = dt
 
     def _on_measure_done(self, spectrum: SpectrumData):
+        if self._closing:
+            return
         self._last_spectrum = spectrum
         self._last_measure_mode = self._pending_measure_mode
-        self.measure_btn.setEnabled(True)
+        self._set_controls_enabled(True)
         self.measure_btn.setText("▶  Measure")
         self._update_plots(spectrum)
         self._update_peak_info(spectrum)
@@ -839,7 +868,9 @@ class AFMMainWindow(QMainWindow):
         self._on_refresh_status()
 
     def _on_measure_error(self, msg: str):
-        self.measure_btn.setEnabled(True)
+        if self._closing:
+            return
+        self._set_controls_enabled(True)
         self.measure_btn.setText("▶  Measure")
         self.statusBar().showMessage(f"Measurement error: {msg}")
         QMessageBox.critical(self, "Measurement Error", msg)
@@ -1182,8 +1213,16 @@ class AFMMainWindow(QMainWindow):
     # Cleanup
     # ---------------------------------------------------------------
     def closeEvent(self, event):
+        self._closing = True
+        # Closing the socket aborts any in-flight read in the worker.
         if self.client.is_connected:
             self.client.disconnect()
+        for worker in (self._worker, self._connect_worker):
+            if worker is not None and worker.isRunning():
+                if not worker.wait(5000):
+                    logger.warning("Worker did not stop; terminating")
+                    worker.terminate()
+                    worker.wait(1000)
         event.accept()
 
 
@@ -1191,6 +1230,7 @@ class AFMMainWindow(QMainWindow):
 # Entry point
 # ---------------------------------------------------------------------------
 def main():
+    logging.basicConfig(level=logging.INFO)
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setStyleSheet(STYLESHEET)
