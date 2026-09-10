@@ -2,7 +2,17 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
+
+namespace
+{
+uint32_t sampleCountForSpectrum(size_t spectrumSize)
+{
+  // Real-input FFT of N samples yields N/2+1 bins
+  return spectrumSize > 1 ? static_cast<uint32_t>(2 * (spectrumSize - 1)) : 1;
+}
+} // namespace
 
 ResonanceAnalyzer::ResonanceAnalyzer(double samplingFrequency)
     : m_samplingFrequency(samplingFrequency)
@@ -34,7 +44,7 @@ ResonanceResults ResonanceAnalyzer::analyzeResonance(const std::vector<float>& m
   float searchEnd = searchBandCenter + searchBandWidth / 2.0f;
   uint32_t peakIndex = findPeakIndex(magnitudeSpectrum, searchStart, searchEnd);
 
-  uint32_t numSamples = magnitudeSpectrum.size() * 2; // Assuming real input (N/2+1 spectrum)
+  uint32_t numSamples = sampleCountForSpectrum(magnitudeSpectrum.size());
   results.peakFrequency = binToFrequency(peakIndex, numSamples);
   results.peakAmplitude = magnitudeSpectrum[peakIndex];
   results.peakPhase = phaseSpectrum[peakIndex];
@@ -57,13 +67,20 @@ uint32_t ResonanceAnalyzer::findPeakIndex(const std::vector<float>& magnitudeSpe
                                           float startFreq,
                                           float endFreq) const
 {
-  uint32_t numSamples = magnitudeSpectrum.size() * 2;
+  if (magnitudeSpectrum.empty())
+  {
+    return 0;
+  }
 
-  uint32_t startBin = frequencyToBin(startFreq, numSamples);
-  uint32_t endBin = frequencyToBin(endFreq, numSamples);
+  uint32_t numSamples = sampleCountForSpectrum(magnitudeSpectrum.size());
+  uint32_t lastBin = static_cast<uint32_t>(magnitudeSpectrum.size() - 1);
 
-  startBin = std::max(static_cast<uint32_t>(0), startBin);
-  endBin = std::min(static_cast<uint32_t>(magnitudeSpectrum.size() - 1), endBin);
+  uint32_t startBin = std::min(frequencyToBin(startFreq, numSamples), lastBin);
+  uint32_t endBin = std::min(frequencyToBin(endFreq, numSamples), lastBin);
+  if (startBin > endBin)
+  {
+    std::swap(startBin, endBin);
+  }
 
   uint32_t peakIndex = startBin;
   float maxAmplitude = magnitudeSpectrum[startBin];
@@ -86,7 +103,7 @@ float ResonanceAnalyzer::calculateQFactor(const std::vector<float>& magnitudeSpe
   uint32_t leftIndex, rightIndex;
   _find3dBBandwidth(magnitudeSpectrum, peakIndex, leftIndex, rightIndex);
 
-  uint32_t numSamples = magnitudeSpectrum.size() * 2;
+  uint32_t numSamples = sampleCountForSpectrum(magnitudeSpectrum.size());
 
   float peakFreq = binToFrequency(peakIndex, numSamples);
   float leftFreq = binToFrequency(leftIndex, numSamples);
@@ -104,7 +121,19 @@ float ResonanceAnalyzer::calculateQFactor(const std::vector<float>& magnitudeSpe
 
 uint32_t ResonanceAnalyzer::frequencyToBin(float frequency, uint32_t numSamples) const
 {
+  if (numSamples == 0 || frequency <= 0.0f)
+  {
+    return 0;
+  }
+
   float binFloat = frequency * numSamples / m_samplingFrequency;
+
+  constexpr float c_MaxBin = static_cast<float>(std::numeric_limits<uint32_t>::max());
+  if (binFloat >= c_MaxBin)
+  {
+    return std::numeric_limits<uint32_t>::max();
+  }
+
   return static_cast<uint32_t>(std::round(binFloat));
 }
 
@@ -134,15 +163,5 @@ void ResonanceAnalyzer::_find3dBBandwidth(const std::vector<float>& magnitudeSpe
   while (rightIndex < magnitudeSpectrum.size() - 1 && magnitudeSpectrum[rightIndex] > threshold)
   {
     rightIndex++;
-  }
-
-  // Ensure we found valid -3dB points
-  if (leftIndex == 0 && magnitudeSpectrum[leftIndex] > threshold)
-  {
-    leftIndex = 0; // Hit spectrum boundary
-  }
-  if (rightIndex == magnitudeSpectrum.size() - 1 && magnitudeSpectrum[rightIndex] > threshold)
-  {
-    rightIndex = magnitudeSpectrum.size() - 1; // Hit spectrum boundary
   }
 }
