@@ -11,7 +11,7 @@ using namespace AFM;
 namespace
 {
 
-constexpr const char* c_DefaultBitstream = "/root/master/tm/fpga/red_pitaya_top.bit.bin";
+constexpr const char* c_DefaultBitstream = "/root/afm/fpga/red_pitaya_top.bit.bin";
 
 ServerOptions parseOk(const std::vector<std::string>& args)
 {

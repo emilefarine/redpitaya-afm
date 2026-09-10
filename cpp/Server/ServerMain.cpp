@@ -14,7 +14,7 @@
 #include <unistd.h>
 #include <vector>
 
-static constexpr const char* FPGA_BITSTREAM_PATH = "/root/master/tm/fpga/red_pitaya_top.bit.bin";
+static constexpr const char* FPGA_BITSTREAM_PATH = "/root/afm/fpga/red_pitaya_top.bit.bin";
 
 // Safe signal handling: only set an atomic flag
 static volatile std::atomic<bool> g_stopSignal{false};
