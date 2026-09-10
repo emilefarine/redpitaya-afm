@@ -78,6 +78,27 @@ TEST_F(SignalGeneratorTest, SineWaveRejectsInvalidParameters)
   EXPECT_THROW(gen.generateSineWave(1000, 100.0, 1.1f), std::invalid_argument);
 }
 
+TEST_F(SignalGeneratorTest, SineZeroFrequencyIsZero)
+{
+  auto sig = gen.generateSineWave(64, 0.0, 1.0f);
+  for (float v : sig)
+    EXPECT_FLOAT_EQ(v, 0.0f);
+}
+
+TEST_F(SignalGeneratorTest, SincZeroAmplitudeIsAllZero)
+{
+  auto sig = gen.generateSincSignal(1024, 200000, 100000, 0.0f);
+  for (float v : sig)
+    EXPECT_FLOAT_EQ(v, 0.0f);
+}
+
+TEST_F(SignalGeneratorTest, SincZeroCenterFrequencyIsFinite)
+{
+  auto sig = gen.generateSincSignal(1024, 0, 100000, 1.0f);
+  for (float v : sig)
+    EXPECT_TRUE(std::isfinite(v));
+}
+
 TEST_F(SignalGeneratorTest, SincCenterSampleMatchesAmplitude)
 {
   const uint32_t N = 1024;
