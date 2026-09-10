@@ -27,7 +27,7 @@ from typing import Optional
 
 import numpy as np
 
-from afm_client import AFMClient, AFMError, SpectrumData
+from afm_client import AFMClient, AFMError, SpectrumData, OperatingMode
 
 
 class AFMShell(cmd.Cmd):
@@ -87,8 +87,16 @@ class AFMShell(cmd.Cmd):
             status = self.client.get_status()
             print(f"  Hardware Initialized: {status.hardware_initialized}")
             print(f"  Board Connected:      {status.board_connected}")
+            print(f"  Operating Mode:       {status.mode.value}")
             print(f"  Measurement Active:   {status.measurement_in_progress}")
             print(f"  Decimation:           {status.decimation}")
+        except AFMError as e:
+            print(f"Error: {e}")
+
+    def do_mode(self, arg):
+        """Get server operating mode (FULL or RP_ONLY)"""
+        try:
+            print(f"  Operating Mode: {self.client.get_mode().value}")
         except AFMError as e:
             print(f"Error: {e}")
 
@@ -124,8 +132,27 @@ class AFMShell(cmd.Cmd):
 
     # ------ Electronic Board Commands ------
 
+    def _board_unavailable_hint(self) -> Optional[str]:
+        """Explain why the electronic board cannot be used, or None if usable."""
+        try:
+            status = self.client.get_status()
+        except AFMError:
+            return None
+        if status.mode == OperatingMode.RP_ONLY:
+            return ("Electronic board unavailable: server started in RP-only mode "
+                    "(restart without --no-board to enable BOARD commands)")
+        if not status.hardware_initialized:
+            return "Electronic board unavailable: run 'init' first"
+        if not status.board_connected:
+            return "Electronic board unavailable: board not connected"
+        return None
+
     def do_mux(self, arg):
         """Set MUX routing: mux <output> <input> or mux disconnect <output>  (channels 1-4)"""
+        hint = self._board_unavailable_hint()
+        if hint:
+            print(hint)
+            return
         args = arg.split()
         try:
             if len(args) == 2:
@@ -146,6 +173,10 @@ class AFMShell(cmd.Cmd):
 
     def do_gain(self, arg):
         """Set gain: gain <channel> <index>  channel=1-4, index 0-7: 1/8, 1/4, 1/2, 1, 2, 4, 8, 16"""
+        hint = self._board_unavailable_hint()
+        if hint:
+            print(hint)
+            return
         args = arg.split()
         try:
             if len(args) == 2:
@@ -162,6 +193,10 @@ class AFMShell(cmd.Cmd):
 
     def do_board_reset(self, arg):
         """Reset electronic board to defaults"""
+        hint = self._board_unavailable_hint()
+        if hint:
+            print(hint)
+            return
         try:
             result = self.client.reset_board()
             print(f"OK: {result}")
@@ -170,6 +205,10 @@ class AFMShell(cmd.Cmd):
 
     def do_board_status(self, arg):
         """Get electronic board status"""
+        hint = self._board_unavailable_hint()
+        if hint:
+            print(hint)
+            return
         try:
             result = self.client.get_board_status()
             print(result)
@@ -336,6 +375,7 @@ System:
   ping            Test connection (SYSTEM:PING)
   version         Show server version (SYSTEM:VERSION)
   status          Show system status (SYSTEM:STATUS?)
+  mode            Show operating mode: FULL or RP_ONLY (SYSTEM:MODE?)
   init            Initialize hardware (SYSTEM:INIT)
   deinit          Deinitialize hardware (SYSTEM:DEINIT)
   shutdown        Shutdown server (SYSTEM:SHUTDOWN)

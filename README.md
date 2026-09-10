@@ -49,7 +49,8 @@ hardware/
 
 ### Hardware
 - Red Pitaya STEMlab 125-14 (Zynq-7010)
-- Custom analog MUX board (design in [`hardware/`](hardware/))
+- Custom analog MUX board (optional; design in [`hardware/`](hardware/)). Without it the
+  server runs in Red Pitaya-only mode and the `BOARD:*` commands are unavailable.
 
 ### Software
 - **Client PC:** Python **3.10+** (developed on 3.13)
@@ -116,7 +117,23 @@ make test_host      # build and run the unit tests
 make coverage       # unit tests + HTML report at out/host/coverage/index.html
 ```
 
-### 3. Connect a client
+### 3. Red Pitaya-only operation (no analog board)
+
+The custom analog board is optional. To run measurements with only a Red Pitaya, start the
+server with `--no-board`, the electronic board is then never probed and every `BOARD:*`
+command is rejected with `ERR_HARDWARE: Electronic board disabled (RP-only mode)`:
+
+```bash
+./out/afm_server --no-board
+```
+
+Connect the cantilever signal directly to **IN1**, the only input acquired by the FPGA
+datapath. `MEASURE:SINC` and `MEASURE:SWEEP` work exactly as with the board, mux routing
+and programmable gain are unavailable. Query the active mode with `SYSTEM:MODE?` (`FULL`
+or `RP_ONLY`); `SYSTEM:STATUS?` also reports `MODE=`. The GUI disables the board panel and
+the routing schematic automatically in RP-only mode.
+
+### 4. Connect a client
 
 Interactive CLI:
 
@@ -163,6 +180,7 @@ every line ends with `\n`. Responses are a single line: `OK [data]` or `ERR_<COD
 | `*IDN?` / `*RST` / `*OPC?` | IEEE 488.2 common commands |
 | `SYSTEM:INIT` / `SYSTEM:DEINIT` / `SYSTEM:STATUS?` | Hardware lifecycle and status |
 | `SYSTEM:PING` / `SYSTEM:VERSION?` / `SYSTEM:SHUTDOWN` | Connectivity check, server version, server shutdown |
+| `SYSTEM:MODE?` | Operating mode: `FULL` or `RP_ONLY` (board disabled with `--no-board`) |
 | `BOARD:MUX:ROUTE <out>,<in>` | Route input to output (channels 1-4) |
 | `BOARD:MUX:DISCONNECT <out>` | Disconnect a multiplexer output |
 | `BOARD:GAIN <ch>,<idx>` | Set programmable gain (idx 0-7 → ×1/8 … ×16) |

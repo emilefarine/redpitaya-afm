@@ -61,6 +61,11 @@ OptionsParseResult parseServerOptions(const std::vector<std::string>& args,
       options.bitstreamPath = args[++i];
       continue;
     }
+    if (arg == "--no-board")
+    {
+      options.noBoard = true;
+      continue;
+    }
 
     // Legacy format: bare port number
     int portVal = 0;

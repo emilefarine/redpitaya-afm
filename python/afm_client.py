@@ -97,6 +97,12 @@ class GainSetting(Enum):
     GAIN_16 = 7
 
 
+class OperatingMode(Enum):
+    """Server operating modes matching AFM::OperatingMode"""
+    FULL = "FULL"        # Red Pitaya with optional electronic board
+    RP_ONLY = "RP_ONLY"  # Red Pitaya only, board disabled
+
+
 @dataclass
 class BoardStatus:
     """Electronic board state parsed from BOARD:STATUS? text block.
@@ -147,6 +153,7 @@ class SystemStatus:
     board_connected: bool = False
     measurement_in_progress: bool = False
     decimation: int = 64
+    mode: OperatingMode = OperatingMode.FULL
 
     @classmethod
     def from_response(cls, response: str) -> 'SystemStatus':
@@ -166,6 +173,11 @@ class SystemStatus:
                 elif key == 'DEC':
                     try:
                         status.decimation = int(value)
+                    except ValueError:
+                        pass
+                elif key == 'MODE':
+                    try:
+                        status.mode = OperatingMode(value)
                     except ValueError:
                         pass
 
@@ -571,6 +583,19 @@ class AFMClient:
         """Get current system status"""
         response = self.send_command("SYSTEM:STATUS?")
         return SystemStatus.from_response(response)
+
+    def get_mode(self) -> OperatingMode:
+        """
+        Get server operating mode (SYSTEM:MODE?).
+
+        Older servers without the MODE query answer with an error; in that
+        case the request is treated as FULL mode.
+        """
+        try:
+            response = self.send_command("SYSTEM:MODE?")
+            return OperatingMode(response)
+        except (AFMCommandError, ValueError):
+            return OperatingMode.FULL
 
     def init(self) -> str:
         """

@@ -17,6 +17,7 @@ from afm_client import (  # noqa: E402
     AFMProtocolError,
     AFMTimeoutError,
     BoardStatus,
+    OperatingMode,
     SystemStatus,
 )
 
@@ -360,10 +361,49 @@ class SystemStatusTests(unittest.TestCase):
         self.assertFalse(status.board_connected)
         self.assertTrue(status.measurement_in_progress)
         self.assertEqual(status.decimation, 128)
+        self.assertEqual(status.mode, OperatingMode.FULL)
 
     def test_bad_decimation_is_ignored(self):
         status = SystemStatus.from_response("HW_INIT=1 DEC=abc")
         self.assertEqual(status.decimation, 64)
+
+    def test_rp_only_mode_is_parsed(self):
+        status = SystemStatus.from_response(
+            "HW_INIT=1 BOARD=0 BUSY=0 DEC=64 MODE=RP_ONLY")
+        self.assertEqual(status.mode, OperatingMode.RP_ONLY)
+
+
+class OperatingModeTests(ClientTestCase):
+    def test_get_mode_rp_only(self):
+        server = self.make_server(
+            lambda command, handler: "OK RP_ONLY\n"
+            if command == "SYSTEM:MODE?" else "ERR_SYNTAX: unknown\n")
+        client = self.make_client(server)
+        self.assertEqual(client.get_mode(), OperatingMode.RP_ONLY)
+
+    def test_get_mode_unknown_replies_default_full(self):
+        server = self.make_server(
+            lambda command, handler: "OK WEIRD\n"
+            if command == "SYSTEM:MODE?" else "ERR_SYNTAX: unknown\n")
+        client = self.make_client(server)
+        self.assertEqual(client.get_mode(), OperatingMode.FULL)
+
+    def test_get_mode_legacy_server_defaults_full(self):
+        server = self.make_server(
+            lambda command, handler: "ERR_SYNTAX: Unknown command: SYSTEM:MODE\n")
+        client = self.make_client(server)
+        self.assertEqual(client.get_mode(), OperatingMode.FULL)
+
+    def test_board_disabled_error_is_parsed(self):
+        server = self.make_server(
+            lambda command, handler:
+            "ERR_HARDWARE: Electronic board disabled (RP-only mode)\n")
+        client = self.make_client(server)
+        with self.assertRaises(AFMCommandError) as ctx:
+            client.send_command("BOARD:GAIN 1,3")
+        self.assertEqual(ctx.exception.status, "ERR_HARDWARE")
+        self.assertEqual(ctx.exception.message,
+                         "Electronic board disabled (RP-only mode)")
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ using namespace AFM;
 namespace
 {
 
-constexpr const char* c_DefaultBitstream = "/root/master/tm/fpga/red_pitaya_top.bit.bin";
+constexpr const char* c_DefaultBitstream = "/root/afm/fpga/red_pitaya_top.bit.bin";
 
 ServerOptions parseOk(const std::vector<std::string>& args)
 {
@@ -30,6 +30,15 @@ TEST(ServerOptionsTest, DefaultsArePreserved)
   ServerOptions options = parseOk({});
   EXPECT_EQ(options.port, ServerConfig::DEFAULT_PORT);
   EXPECT_EQ(options.bitstreamPath, c_DefaultBitstream);
+  EXPECT_FALSE(options.noBoard);
+}
+
+TEST(ServerOptionsTest, ParsesNoBoardFlag)
+{
+  EXPECT_TRUE(parseOk({"--no-board"}).noBoard);
+  EXPECT_TRUE(parseOk({"--no-board", "-p", "6000"}).noBoard);
+  EXPECT_EQ(parseOk({"--no-board", "-p", "6000"}).port, 6000);
+  EXPECT_TRUE(parseOk({"-b", "/tmp/fpga.bit.bin", "--no-board"}).noBoard);
 }
 
 TEST(ServerOptionsTest, ParsesShortAndLongPort)

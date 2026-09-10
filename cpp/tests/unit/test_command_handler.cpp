@@ -41,6 +41,11 @@ protected:
     m_rawHw = m_nextHw.get();
     m_rawBoard = m_nextBoard.get();
 
+    createHandler();
+  }
+
+  void createHandler(AFM::OperatingMode mode = AFM::OperatingMode::FULL)
+  {
     m_handler = std::make_unique<AFM::CommandHandler>(
         [this]() -> std::unique_ptr<IRedPitayaHardware>
         {
@@ -53,6 +58,7 @@ protected:
         },
         [this]() -> std::unique_ptr<IElectronicBoard>
         {
+          ++m_boardFactoryCalls;
           if (!m_nextBoard)
           {
             m_nextBoard = std::make_unique<MockElectronicBoard>();
@@ -60,7 +66,7 @@ protected:
           m_rawBoard = m_nextBoard.get();
           return std::move(m_nextBoard);
         },
-        50);
+        50, mode);
   }
 
   MockRedPitayaHardware* stageHardware()
@@ -120,6 +126,7 @@ protected:
   std::unique_ptr<MockElectronicBoard> m_nextBoard;
   MockRedPitayaHardware* m_rawHw = nullptr;
   MockElectronicBoard* m_rawBoard = nullptr;
+  int m_boardFactoryCalls = 0;
   std::unique_ptr<AFM::CommandHandler> m_handler;
 };
 
@@ -178,6 +185,7 @@ TEST_F(CommandHandlerTest, InitSuccessSetsStatusFlags)
   EXPECT_NE(status.find("HW_INIT=1"), std::string::npos);
   EXPECT_NE(status.find("BOARD=1"), std::string::npos);
   EXPECT_NE(status.find("DEC=64"), std::string::npos);
+  EXPECT_NE(status.find("MODE=FULL"), std::string::npos);
 }
 
 TEST_F(CommandHandlerTest, InitWithoutBoardStillSucceeds)
@@ -192,6 +200,65 @@ TEST_F(CommandHandlerTest, InitWithoutBoardStillSucceeds)
 
   EXPECT_TRUE(m_handler->getStatus().hardwareInitialized);
   EXPECT_FALSE(m_handler->getStatus().boardConnected);
+}
+
+TEST_F(CommandHandlerTest, RpOnlyModeNeverProbesBoard)
+{
+  createHandler(AFM::OperatingMode::RP_ONLY);
+  ON_CALL(*m_rawHw, initialize()).WillByDefault(Return(true));
+  ON_CALL(*m_rawHw, getDecimation()).WillByDefault(Return(64));
+
+  std::string resp = send("SYSTEM:INIT");
+  EXPECT_EQ(resp.compare(0, 2, "OK"), 0) << resp;
+  EXPECT_NE(resp.find("DISABLED"), std::string::npos);
+  EXPECT_EQ(m_boardFactoryCalls, 0);
+  EXPECT_TRUE(m_handler->getStatus().hardwareInitialized);
+  EXPECT_FALSE(m_handler->getStatus().boardConnected);
+
+  EXPECT_EQ(send("SYSTEM:MODE?"), "OK RP_ONLY\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("MODE=RP_ONLY"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, ModeQueryReportsFullMode)
+{
+  initHardware(true);
+  EXPECT_EQ(send("SYSTEM:MODE?"), "OK FULL\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("MODE=FULL"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, RpOnlyModeBoardCommandsReportDisabled)
+{
+  createHandler(AFM::OperatingMode::RP_ONLY);
+  ON_CALL(*m_rawHw, initialize()).WillByDefault(Return(true));
+  ON_CALL(*m_rawHw, getDecimation()).WillByDefault(Return(64));
+  ASSERT_EQ(send("SYSTEM:INIT").compare(0, 2, "OK"), 0);
+
+  EXPECT_NE(send("BOARD:MUX:ROUTE 1,2").find("RP-only mode"), std::string::npos);
+  EXPECT_NE(send("BOARD:MUX:DISCONNECT 1").find("RP-only mode"), std::string::npos);
+  EXPECT_NE(send("BOARD:GAIN 1,3").find("RP-only mode"), std::string::npos);
+  EXPECT_NE(send("BOARD:RESET").find("RP-only mode"), std::string::npos);
+  EXPECT_NE(send("BOARD:STATUS?").find("RP-only mode"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, RpOnlyModeStillRunsMeasurements)
+{
+  createHandler(AFM::OperatingMode::RP_ONLY);
+  ON_CALL(*m_rawHw, initialize()).WillByDefault(Return(true));
+  ON_CALL(*m_rawHw, getDecimation()).WillByDefault(Return(64));
+  ASSERT_EQ(send("SYSTEM:INIT").compare(0, 2, "OK"), 0);
+  primeSuccessfulMeasurement(1024);
+
+  std::string resp = send("MEASURE:SINC 200,100,1024,64,1");
+  EXPECT_EQ(resp.compare(0, 3, "OK "), 0) << resp;
+}
+
+TEST_F(CommandHandlerTest, RstPreservesOperatingMode)
+{
+  createHandler(AFM::OperatingMode::RP_ONLY);
+  EXPECT_EQ(send("SYSTEM:MODE?"), "OK RP_ONLY\n");
+
+  EXPECT_EQ(send("*RST"), "OK\n");
+  EXPECT_EQ(send("SYSTEM:MODE?"), "OK RP_ONLY\n");
 }
 
 TEST_F(CommandHandlerTest, InitFailureReturnsHardwareError)
