@@ -81,7 +81,12 @@ class AFMBusyError(AFMError):
 
 
 class AFMTimeoutError(AFMError):
-    """Timeout errors"""
+    """Timeout errors.
+
+    A read timeout invalidates the connection: the client disconnects so a
+    late response can never be mistaken for the next command's result. The
+    caller must reconnect before issuing further commands.
+    """
     pass
 
 
@@ -193,6 +198,11 @@ class AFMClient:
     measurement holds the lock for its full duration, so UIs must not issue
     other commands while one is running. ``disconnect()`` may be called from
     any thread to abort an in-flight operation.
+
+    A read timeout closes the connection: the server may still be computing
+    the response, so keeping the socket open would let that late response be
+    consumed as the result of the next command. Callers must reconnect (or
+    create a new client) after ``AFMTimeoutError``.
     """
 
     DEFAULT_PORT = 5025
@@ -399,7 +409,10 @@ class AFMClient:
             return line
 
         except socket.timeout:
-            raise AFMTimeoutError("Read timeout")
+            # Close the connection so a late response can never be consumed
+            # as the result of the next command (see class docstring).
+            self.disconnect()
+            raise AFMTimeoutError("Read timeout (connection closed to avoid stale data)")
         except socket.error as e:
             self.disconnect()
             raise AFMConnectionError(f"Receive failed: {e}")
@@ -448,7 +461,10 @@ class AFMClient:
             return chunk
 
         except socket.timeout:
-            raise AFMTimeoutError("Read timeout")
+            # Close the connection so a late response can never be consumed
+            # as the result of the next command (see class docstring).
+            self.disconnect()
+            raise AFMTimeoutError("Read timeout (connection closed to avoid stale data)")
         except socket.error as e:
             self.disconnect()
             raise AFMConnectionError(f"Receive failed: {e}")

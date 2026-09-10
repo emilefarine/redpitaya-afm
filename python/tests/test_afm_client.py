@@ -155,6 +155,42 @@ class CommunicationTests(ClientTestCase):
         client = self.make_client(server, timeout=0.2)
         with self.assertRaises(AFMTimeoutError):
             client.send_command("SYSTEM:PING")
+        # A timeout closes the connection so a late response cannot be
+        # mistaken for the next command's result.
+        self.assertFalse(client.is_connected)
+
+    def test_timeout_closes_connection_and_avoids_stale_response(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def respond(command, handler):
+            if command == "SLOW:CMD":
+                started.set()
+                release.wait(5.0)
+                return "OK STALE PAYLOAD\n"
+            return "OK PONG\n"
+
+        server = self.make_server(respond)
+        client = self.make_client(server, timeout=0.2)
+
+        try:
+            with self.assertRaises(AFMTimeoutError):
+                client.send_command("SLOW:CMD")
+            self.assertTrue(started.wait(1.0))
+            self.assertFalse(client.is_connected)
+
+            # The server eventually answers the timed-out command. The closed
+            # connection must reject the next command rather than consume the
+            # stale response as its own.
+            release.set()
+            with self.assertRaises(AFMConnectionError):
+                client.send_command("SYSTEM:PING")
+
+            # A fresh connection recovers normally.
+            recovered = self.make_client(server)
+            self.assertTrue(recovered.ping())
+        finally:
+            release.set()
 
     def test_non_ascii_command_rejected(self):
         server = self.make_server(lambda command, handler: "OK PONG\n")
