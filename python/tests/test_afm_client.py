@@ -212,6 +212,24 @@ class CommunicationTests(ClientTestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual(result["spectrum"].num_points, 1)
 
+    def test_closed_socket_translated_to_connection_error(self):
+        server = self.make_server(lambda command, handler: "OK PONG\n")
+        client = self.make_client(server)
+        client._socket.close()
+        with self.assertRaises(AFMConnectionError):
+            client.send_command("SYSTEM:PING")
+
+    def test_shutdown_busy_keeps_connection(self):
+        server = self.make_server(lambda command, handler: "OK Shutting down\n")
+        client = self.make_client(server)
+        self.assertTrue(client._lock.acquire(blocking=False))
+        try:
+            with self.assertRaises(AFMBusyError):
+                client.shutdown()
+            self.assertTrue(client.is_connected)
+        finally:
+            client._lock.release()
+
 
 class SpectrumTests(ClientTestCase):
     def test_fast_path_parses_payload(self):

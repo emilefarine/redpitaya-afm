@@ -189,6 +189,7 @@ class AFMClient:
     MAX_LINE_BYTES = 1 << 20
     MAX_SPECTRUM_ROWS = 65536
     MAX_SPECTRUM_BYTES = 8 << 20
+    # Mirrors AFM::ServerConfig::MAX_SWEEP_POINTS in cpp/Server/Protocol.h
     MAX_SWEEP_POINTS = 4096
     MAX_BOARD_STATUS_LINES = 256
 
@@ -302,16 +303,21 @@ class AFMClient:
         sock = self._socket
         if sock is None:
             return
-        # Drain anything sitting in the OS socket buffer
+        # Drain anything sitting in the OS socket buffer. A concurrent
+        # disconnect() can close the socket under us; translate that to the
+        # same error callers get from a failed send or read.
         try:
             sock.setblocking(False)
-            try:
-                while True:
-                    data = sock.recv(self.RECV_BUFFER_SIZE)
-                    if not data:
-                        break
-            except (BlockingIOError, socket.error):
-                pass
+        except OSError as e:
+            self.disconnect()
+            raise AFMConnectionError(f"Receive failed: {e}")
+        try:
+            while True:
+                data = sock.recv(self.RECV_BUFFER_SIZE)
+                if not data:
+                    break
+        except (BlockingIOError, socket.error):
+            pass
         finally:
             try:
                 sock.settimeout(self.timeout)
@@ -354,10 +360,11 @@ class AFMClient:
 
         sock = self._socket
         prev_timeout = sock.gettimeout()
-        if timeout_override is not None:
-            sock.settimeout(timeout_override)
 
         try:
+            if timeout_override is not None:
+                sock.settimeout(timeout_override)
+
             # Look for newline in bytes buffer
             while b'\n' not in self._recv_buffer:
                 data = sock.recv(self.RECV_BUFFER_SIZE)
@@ -412,10 +419,11 @@ class AFMClient:
 
         sock = self._socket
         prev_timeout = sock.gettimeout()
-        if timeout_override is not None:
-            sock.settimeout(timeout_override)
 
         try:
+            if timeout_override is not None:
+                sock.settimeout(timeout_override)
+
             while len(self._recv_buffer) < num_bytes:
                 data = sock.recv(self.RECV_BUFFER_SIZE)
                 if not data:
@@ -546,7 +554,8 @@ class AFMClient:
         Test connection to server.
 
         Returns:
-            True if server responds with PONG
+            True if server responds with PONG. A server error reply counts
+            as no response; AFMBusyError and connection errors propagate.
         """
         try:
             response = self.send_command("SYSTEM:PING")
@@ -577,16 +586,22 @@ class AFMClient:
         return self.send_command("SYSTEM:DEINIT")
 
     def shutdown(self) -> None:
-        """Shutdown the server"""
+        """Shutdown the server.
+
+        Raises:
+            AFMBusyError: If a measurement or command is in progress; the
+                connection is left open so shutdown can be retried.
+        """
         try:
             with self._transaction():
                 self._send("SYSTEM:SHUTDOWN")
                 # Server will close connection
                 self._read_line()
+        except AFMBusyError:
+            raise
         except AFMError:
             pass
-        finally:
-            self.disconnect()
+        self.disconnect()
 
     # ------ Electronic Board Commands --------
 
