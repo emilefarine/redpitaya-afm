@@ -102,6 +102,28 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertFalse(self.window.board_panel.isEnabled())
         self.assertFalse(self.window.schematic_btn.isEnabled())
 
+    def test_measure_error_syncs_connection_ui(self):
+        from unittest import mock
+
+        server = self.make_server(lambda command, handler: "OK\n")
+        client = AFMClient("127.0.0.1", server.port, timeout=2.0)
+        client.connect()
+        self.addCleanup(client.disconnect)
+        self.window.client = client
+        self.window._update_connection_ui(True)
+
+        with mock.patch("afm_gui.QMessageBox"):
+            # Connected client: an error keeps the controls enabled.
+            self.window._on_measure_error("boom")
+            self.assertEqual(self.window.connect_btn.text(), "Disconnect")
+            self.assertTrue(self.window.measure_btn.isEnabled())
+
+            # A read timeout closes the connection; the UI must show offline.
+            client.disconnect()
+            self.window._on_measure_error("timeout")
+            self.assertEqual(self.window.connect_btn.text(), "Connect")
+            self.assertFalse(self.window.measure_btn.isEnabled())
+
     def test_peak_detection_and_display(self):
         freq = np.linspace(100.0, 200.0, 256)
         mag = np.exp(-((freq - 150.0) / 5.0) ** 2) + 0.01

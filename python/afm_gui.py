@@ -906,7 +906,9 @@ class AFMMainWindow(QMainWindow):
     def _on_measure_error(self, msg: str):
         if self._closing:
             return
-        self._set_controls_enabled(True)
+        # A read timeout closes the connection; reflect that in the UI so the
+        # next click reconnects instead of pretending we are still connected.
+        self._update_connection_ui(self.client.is_connected)
         self.measure_btn.setText("▶  Measure")
         self.statusBar().showMessage(f"Measurement error: {msg}")
         QMessageBox.critical(self, "Measurement Error", msg)
