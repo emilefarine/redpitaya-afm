@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../Common/LineBuffer.h"
+#include "LineBuffer.h"
 #include "Protocol.h"
 
 #include <atomic>

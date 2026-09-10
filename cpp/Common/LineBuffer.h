@@ -9,8 +9,9 @@
  * Portable line framing helper shared by TCPServer and ElectronicBoardUART.
  * A line is complete when it contains '\n'; a trailing '\r' is stripped.
  * Overflow is reported only when the buffered content exceeds the configured
- * limit without containing a line terminator, so complete lines are never
- * discarded because of the size cap.
+ * limit while containing no line terminator. A chunk that adds a terminator
+ * is always accepted; callers must pop pending lines before appending again,
+ * so the buffer is bounded by the limit plus one chunk.
  */
 class LineBuffer
 {

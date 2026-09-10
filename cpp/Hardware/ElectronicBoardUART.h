@@ -24,8 +24,8 @@
 #ifndef ELECTRONIC_BOARD_UART_H
 #define ELECTRONIC_BOARD_UART_H
 
-#include "../Common/LineBuffer.h"
 #include "BoardProtocol.h"
+#include "LineBuffer.h"
 #include "IElectronicBoard.h"
 
 #include <cstdint>
