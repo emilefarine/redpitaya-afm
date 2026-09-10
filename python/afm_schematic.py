@@ -28,7 +28,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtCore import Qt, QPointF, QRectF
 
-from afm_client import AFMError, BoardStatus
+from afm_client import AFMError, BoardStatus, OperatingMode
 
 # ---------------------------------------------------------------------------
 # Color palette (mirrors afm_gui.py; duplicated to avoid circular imports)
@@ -474,6 +474,18 @@ class RoutingSchematicDialog(QDialog):
             self.status_label.setStyleSheet(f"color: {RED};")
             return
         try:
+            mode = self.client.get_mode()
+        except AFMError:
+            mode = None
+        if mode == OperatingMode.RP_ONLY:
+            self.routing = {i: None for i in range(1, 5)}
+            self.gains = {i: "-" for i in range(1, 5)}
+            self.cancel_selection()
+            self._redraw_routes()
+            self.status_label.setText("RP-only mode: board routing unavailable")
+            self.status_label.setStyleSheet(f"color: {TEXT_DIM};")
+            return
+        try:
             state = self.client.get_board_state()
         except AFMError as exc:
             self.status_label.setText(f"Status error: {exc}")
@@ -612,6 +624,9 @@ class MockAFMClient:
         self.is_connected = True
         self._routing = {1: None, 2: None, 3: None, 4: None}
         self._gains = {1: "1", 2: "2", 3: "1", 4: "1/8"}
+
+    def get_mode(self) -> OperatingMode:
+        return OperatingMode.FULL
 
     def get_board_status(self) -> str:
         lines = ["=== MUX Status ===", "Routing:"]

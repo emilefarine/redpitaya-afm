@@ -16,7 +16,7 @@ from PyQt6.QtGui import QFont, QColor, QPainter, QIcon
 import pyqtgraph as pg
 
 from afm_client import (
-    AFMClient, AFMError, AFMBusyError, SpectrumData,
+    AFMClient, AFMError, AFMBusyError, SpectrumData, OperatingMode,
 )
 from afm_schematic import RoutingSchematicDialog
 
@@ -259,6 +259,7 @@ class AFMMainWindow(QMainWindow):
         self._last_measure_mode = "sinc"
         self._pending_measure_mode = "sinc"
         self._closing = False
+        self.board_available = False
 
         # Display-scaled data (units may differ from wire-format units)
         self._freq_display: np.ndarray = np.array([], dtype=np.float64)
@@ -379,6 +380,7 @@ class AFMMainWindow(QMainWindow):
     # --- Board panel ---
     def _build_board_panel(self) -> QGroupBox:
         grp = QGroupBox("Board Configuration")
+        self.board_panel = grp
         layout = QGridLayout(grp)
         layout.setSpacing(4)
 
@@ -706,10 +708,34 @@ class AFMMainWindow(QMainWindow):
 
     def _set_controls_enabled(self, enabled: bool):
         """Enable or disable every command entry point in one place."""
-        for btn in [self.init_hw_btn, self.mux_set_btn, self.mux_disc_btn, self.gain_set_btn,
-                     self.board_status_btn, self.board_reset_btn, self.schematic_btn,
-                     self.measure_btn, self.refresh_status_btn]:
+        for btn in [self.init_hw_btn, self.measure_btn, self.refresh_status_btn]:
             btn.setEnabled(enabled)
+        for btn in [self.mux_set_btn, self.mux_disc_btn, self.gain_set_btn,
+                    self.board_status_btn, self.board_reset_btn, self.schematic_btn]:
+            btn.setEnabled(enabled)
+
+        self.board_panel.setEnabled(enabled and self.board_available)
+        if not enabled:
+            self.board_available = False
+            self.board_panel.setToolTip("")
+
+    def _update_board_controls(self, status):
+        """Enable board controls only while an electronic board is usable."""
+        rp_only = status.mode == OperatingMode.RP_ONLY
+        self.board_available = (status.hardware_initialized and status.board_connected
+                                and not rp_only)
+        self.board_panel.setEnabled(self.board_available)
+
+        if rp_only:
+            reason = "Electronic board disabled (server started in RP-only mode)"
+        elif not status.hardware_initialized:
+            reason = "Initialize hardware first (Init HW)"
+        elif not status.board_connected:
+            reason = "Electronic board not connected"
+        else:
+            reason = "Route inputs, set gains, or open the routing schematic"
+        self.board_panel.setToolTip(reason)
+        self.schematic_btn.setToolTip(reason)
 
     # ---------------------------------------------------------------
     # Status & Initialization
@@ -727,15 +753,20 @@ class AFMMainWindow(QMainWindow):
             return
         try:
             status = self.client.get_status()
+            rp_only = status.mode == OperatingMode.RP_ONLY
+            board_label = "RP-only" if rp_only else ("✓" if status.board_connected else "✗")
+            board_color = (TEXT_DIM if rp_only
+                           else (GREEN if status.board_connected else RED))
             icons = ["✓" if status.hardware_initialized else "✗",
-                     "✓" if status.board_connected else "✗",
+                     board_label,
                      str(status.decimation)]
             colors = [GREEN if status.hardware_initialized else RED,
-                      GREEN if status.board_connected else RED,
+                      board_color,
                       TEXT]
             for val_lbl, icon, color in zip(self.status_values, icons, colors):
                 val_lbl.setText(icon)
                 val_lbl.setStyleSheet(f"color: {color}; font-weight: bold;")
+            self._update_board_controls(status)
         except AFMBusyError:
             self.statusBar().showMessage("Status refresh skipped: client busy")
         except AFMError as exc:

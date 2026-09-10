@@ -29,7 +29,7 @@ import numpy as np  # noqa: E402
 from test_afm_client import FakeSCPIServer, spectrum_response  # noqa: E402
 
 if HAVE_QT:
-    from afm_client import AFMClient, SpectrumData
+    from afm_client import AFMClient, SpectrumData, SystemStatus
     from afm_gui import AFMMainWindow
     from afm_schematic import MockAFMClient, RoutingSchematicDialog
 
@@ -65,6 +65,19 @@ class GuiSmokeTests(unittest.TestCase):
         dialog.refresh_state()
         self.assertEqual(dialog.status_label.text(), "Not connected")
         dialog.close()
+
+    def test_rp_only_disables_board_panel(self):
+        status = SystemStatus.from_response("HW_INIT=1 BOARD=0 DEC=64 MODE=RP_ONLY")
+        self.window._update_board_controls(status)
+        self.assertFalse(self.window.board_panel.isEnabled())
+        self.assertFalse(self.window.board_available)
+        self.assertIn("RP-only", self.window.board_panel.toolTip())
+
+    def test_connected_board_enables_board_panel(self):
+        status = SystemStatus.from_response("HW_INIT=1 BOARD=1 DEC=64 MODE=FULL")
+        self.window._update_board_controls(status)
+        self.assertTrue(self.window.board_panel.isEnabled())
+        self.assertTrue(self.window.board_available)
 
     def test_peak_detection_and_display(self):
         freq = np.linspace(100.0, 200.0, 256)
