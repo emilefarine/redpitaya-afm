@@ -259,6 +259,8 @@ class AFMShell(cmd.Cmd):
     def _print_spectrum_summary(spectrum: SpectrumData):
         """Print summary of spectrum data"""
         print(f"  Points:         {spectrum.num_points}")
+        if spectrum.num_points == 0:
+            return
         print(f"  Freq range:     {spectrum.freq_kHz[0]:.3f} - {spectrum.freq_kHz[-1]:.3f} kHz")
         peak_idx = int(np.argmax(spectrum.magnitude))
         print(f"  Peak frequency: {spectrum.freq_kHz[peak_idx]:.3f} kHz")

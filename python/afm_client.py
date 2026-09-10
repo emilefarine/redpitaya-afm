@@ -670,7 +670,7 @@ class AFMClient:
             num_bytes = int(parts[3]) if len(parts) >= 4 else None
         except ValueError:
             raise AFMProtocolError(f"Malformed spectrum header: {header}")
-        if num_rows <= 0 or num_rows > self.MAX_SPECTRUM_ROWS:
+        if num_rows < 0 or num_rows > self.MAX_SPECTRUM_ROWS:
             raise AFMProtocolError(f"Spectrum row count out of range: {num_rows}")
         if num_bytes is not None and not 0 <= num_bytes <= self.MAX_SPECTRUM_BYTES:
             raise AFMProtocolError(f"Spectrum byte count out of range: {num_bytes}")

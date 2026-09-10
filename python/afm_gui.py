@@ -1033,7 +1033,21 @@ class AFMMainWindow(QMainWindow):
 
         return freq_display, mag_display, phase_deg
 
+    def _clear_plots(self):
+        """Reset display state when a measurement returns no points."""
+        self._freq_display = np.array([], dtype=np.float64)
+        self._mag_display = np.array([], dtype=np.float64)
+        self._phase_display_deg = np.array([], dtype=np.float64)
+        self.mag_curve.setData([], [])
+        self.phase_curve.setData([], [])
+        self.mag_peak_scatter.setData([], [])
+        self.phase_peak_scatter.setData([], [])
+
     def _update_plots(self, spectrum: SpectrumData):
+        if spectrum.num_points == 0:
+            self._clear_plots()
+            return
+
         freq, mag, phase_deg = self._prepare_display_data(spectrum)
 
         self._freq_display = freq
@@ -1090,6 +1104,13 @@ class AFMMainWindow(QMainWindow):
             self.phase_plot.autoRange()
 
     def _update_peak_info(self, spectrum: SpectrumData):
+        if spectrum.num_points == 0:
+            for key in ("peak_freq", "peak_mag", "peak_phase", "bw", "q_factor"):
+                self.info_labels[key].setText("N/A")
+            self.info_labels["points"].setText("0")
+            self.info_labels["meas_time"].setText(f"{self._measure_time:.2f} s")
+            return
+
         freq = self._freq_display
         mag = self._mag_display
         phase_deg = self._phase_display_deg

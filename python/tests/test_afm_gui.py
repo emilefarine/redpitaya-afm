@@ -77,6 +77,11 @@ class GuiSmokeTests(unittest.TestCase):
         peak = self.window._find_peak_index(self.window._mag_display)
         self.assertLess(abs(self.window._freq_display[peak] - 150.0), 2.0)
 
+    def test_empty_spectrum_does_not_crash(self):
+        self.window._update_plots(SpectrumData())
+        self.window._update_peak_info(SpectrumData())
+        self.assertEqual(self.window.info_labels["points"].text(), "0")
+
     def test_measure_worker_updates_window(self):
         rows = [(1.0, 0.5, 0.25), (2.0, 0.75, -0.5)]
 

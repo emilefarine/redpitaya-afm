@@ -311,6 +311,15 @@ class SpectrumTests(ClientTestCase):
             client.send_command("MEASURE:SINC 1,1")
         self.assertTrue(client.ping())
 
+    def test_empty_spectrum_is_accepted(self):
+        for response in ("OK DATA 0 0\n", "OK DATA 0\n"):
+            with self.subTest(response=response):
+                server = self.make_server(
+                    lambda command, handler, r=response: r)
+                client = self.make_client(server)
+                spectrum = client.measure_sinc(1.0, 1.0)
+                self.assertEqual(spectrum.num_points, 0)
+
 
 class BoardStatusTests(ClientTestCase):
     BLOCK = (
