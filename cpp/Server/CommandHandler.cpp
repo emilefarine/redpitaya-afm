@@ -650,6 +650,7 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
     if (!_waitForMeasurement())
     {
       m_status.measurementInProgress = false;
+      m_hardware->resetMeasurement();
       return buildErrorResponse(ResponseStatus::ERR_HARDWARE,
                                 "Measurement timeout at " + std::to_string(freqKHz) + " kHz");
     }

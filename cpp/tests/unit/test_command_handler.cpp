@@ -360,6 +360,22 @@ TEST_F(CommandHandlerTest, SweepRejectsTooManyPoints)
   EXPECT_NE(resp.find("4096"), std::string::npos);
 }
 
+TEST_F(CommandHandlerTest, SweepTimeoutReturnsHardwareErrorAndResets)
+{
+  initHardware(true);
+
+  ON_CALL(*m_rawHw, setDecimation(_)).WillByDefault(Return(true));
+  ON_CALL(*m_rawHw, loadGenerationSignal(_)).WillByDefault(Return(true));
+  ON_CALL(*m_rawHw, startMeasurement(_, _)).WillByDefault(Return(true));
+  ON_CALL(*m_rawHw, isMeasurementComplete()).WillByDefault(Return(false));
+  EXPECT_CALL(*m_rawHw, resetMeasurement()).Times(AtLeast(1)).WillRepeatedly(Return(true));
+
+  std::string resp = send("MEASURE:SWEEP 200,10");
+  EXPECT_NE(resp.find("ERR_HARDWARE"), std::string::npos);
+  EXPECT_NE(resp.find("timeout"), std::string::npos);
+  EXPECT_FALSE(m_handler->getStatus().measurementInProgress);
+}
+
 TEST_F(CommandHandlerTest, MeasSincSucceeds)
 {
   initHardware(true);
