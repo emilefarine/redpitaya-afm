@@ -100,6 +100,11 @@ uint32_t ResonanceAnalyzer::findPeakIndex(const std::vector<float>& magnitudeSpe
 float ResonanceAnalyzer::calculateQFactor(const std::vector<float>& magnitudeSpectrum,
                                           uint32_t peakIndex) const
 {
+  if (magnitudeSpectrum.empty() || peakIndex >= magnitudeSpectrum.size())
+  {
+    return 0.0f;
+  }
+
   uint32_t leftIndex, rightIndex;
   _find3dBBandwidth(magnitudeSpectrum, peakIndex, leftIndex, rightIndex);
 
@@ -121,7 +126,7 @@ float ResonanceAnalyzer::calculateQFactor(const std::vector<float>& magnitudeSpe
 
 uint32_t ResonanceAnalyzer::frequencyToBin(float frequency, uint32_t numSamples) const
 {
-  if (numSamples == 0 || frequency <= 0.0f)
+  if (numSamples == 0 || !std::isfinite(frequency) || frequency <= 0.0f)
   {
     return 0;
   }
@@ -139,6 +144,10 @@ uint32_t ResonanceAnalyzer::frequencyToBin(float frequency, uint32_t numSamples)
 
 float ResonanceAnalyzer::binToFrequency(uint32_t binIndex, uint32_t numSamples) const
 {
+  if (numSamples == 0)
+  {
+    return 0.0f;
+  }
   return static_cast<float>(binIndex) * m_samplingFrequency / numSamples;
 }
 

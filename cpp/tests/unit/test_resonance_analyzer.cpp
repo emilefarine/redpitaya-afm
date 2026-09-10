@@ -185,6 +185,26 @@ TEST_F(ResonanceAnalyzerTest, FrequencyToBinClampsInvalidInputs)
   EXPECT_EQ(analyzer.frequencyToBin(1000.0f, 0u), 0u);
 }
 
+TEST_F(ResonanceAnalyzerTest, FrequencyToBinNonFiniteReturnsZero)
+{
+  EXPECT_EQ(analyzer.frequencyToBin(std::nanf(""), c_N), 0u);
+  EXPECT_EQ(analyzer.frequencyToBin(std::numeric_limits<float>::infinity(), c_N), 0u);
+  EXPECT_EQ(analyzer.frequencyToBin(-std::numeric_limits<float>::infinity(), c_N), 0u);
+}
+
+TEST_F(ResonanceAnalyzerTest, CalculateQFactorRejectsEmptyAndOutOfRange)
+{
+  EXPECT_FLOAT_EQ(analyzer.calculateQFactor({}, 0), 0.0f);
+
+  std::vector<float> mag(16, 1.0f);
+  EXPECT_FLOAT_EQ(analyzer.calculateQFactor(mag, 16), 0.0f);
+}
+
+TEST_F(ResonanceAnalyzerTest, BinToFrequencyZeroSamplesReturnsZero)
+{
+  EXPECT_FLOAT_EQ(analyzer.binToFrequency(5, 0), 0.0f);
+}
+
 TEST_F(ResonanceAnalyzerTest, AnalyzeResonanceUsesConsistentBinWidth)
 {
   // 5 bins -> N = 8 -> bin 2 sits at 250 Hz for fs = 1000
