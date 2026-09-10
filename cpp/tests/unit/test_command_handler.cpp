@@ -11,6 +11,7 @@
 #include <cmath>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,7 @@ using ::testing::_;
 using ::testing::AtLeast;
 using ::testing::Invoke;
 using ::testing::Return;
+using ::testing::Throw;
 using ::testing::ReturnRef;
 using ::testing::SizeIs;
 using ::testing::WithArg;
@@ -373,6 +375,56 @@ TEST_F(CommandHandlerTest, SweepTimeoutReturnsHardwareErrorAndResets)
   std::string resp = send("MEASURE:SWEEP 200,10");
   EXPECT_NE(resp.find("ERR_HARDWARE"), std::string::npos);
   EXPECT_NE(resp.find("timeout"), std::string::npos);
+  EXPECT_FALSE(m_handler->getStatus().measurementInProgress);
+}
+
+TEST_F(CommandHandlerTest, SweepStepDoesNotOvershootStop)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+
+  std::string resp = send("MEASURE:SWEEP 500,10,7"); // start 495, stop 505 -> 495, 502
+  ASSERT_EQ(resp.compare(0, 3, "OK "), 0) << resp;
+
+  size_t count = 0;
+  size_t bytes = 0;
+  ASSERT_TRUE(parseDataHeader(resp, count, bytes));
+  EXPECT_EQ(count, 2u);
+  EXPECT_NE(resp.find("495.000"), std::string::npos);
+  EXPECT_NE(resp.find("502.000"), std::string::npos);
+  EXPECT_EQ(resp.find("509.000"), std::string::npos);
+  EXPECT_FALSE(m_handler->getStatus().measurementInProgress);
+}
+
+TEST_F(CommandHandlerTest, SweepLastPointStaysBelowNyquist)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+
+  // dec 64 -> Nyquist 976.5625 kHz; a point at 977 kHz would exceed stop and Nyquist
+  std::string resp = send("MEASURE:SWEEP 970,10,4");
+  ASSERT_EQ(resp.compare(0, 3, "OK "), 0) << resp;
+
+  size_t count = 0;
+  size_t bytes = 0;
+  ASSERT_TRUE(parseDataHeader(resp, count, bytes));
+  EXPECT_EQ(count, 3u);
+  EXPECT_EQ(resp.find("977.000"), std::string::npos);
+  EXPECT_FALSE(m_handler->getStatus().measurementInProgress);
+}
+
+TEST_F(CommandHandlerTest, ExceptionFromHardwareClearsBusyFlag)
+{
+  initHardware(true);
+
+  ON_CALL(*m_rawHw, setDecimation(_)).WillByDefault(Return(true));
+  ON_CALL(*m_rawHw, loadGenerationSignal(_)).WillByDefault(Return(true));
+  ON_CALL(*m_rawHw, startMeasurement(_, _)).WillByDefault(Return(true));
+  ON_CALL(*m_rawHw, isMeasurementComplete()).WillByDefault(Return(true));
+  ON_CALL(*m_rawHw, getAcquiredSignal(_)).WillByDefault(Throw(std::runtime_error("boom")));
+  EXPECT_CALL(*m_rawHw, resetMeasurement()).Times(AtLeast(1)).WillRepeatedly(Return(true));
+
+  EXPECT_THROW(send("MEASURE:SINC 200,100"), std::runtime_error);
   EXPECT_FALSE(m_handler->getStatus().measurementInProgress);
 }
 

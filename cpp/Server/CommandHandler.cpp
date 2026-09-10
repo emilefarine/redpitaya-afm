@@ -23,6 +23,35 @@
 namespace AFM
 {
 
+namespace
+{
+
+class ScopedMeasurement
+{
+public:
+  ScopedMeasurement(SystemStatus& status, IRedPitayaHardware& hardware)
+      : m_status(status)
+      , m_hardware(hardware)
+  {
+    m_status.measurementInProgress = true;
+  }
+
+  ~ScopedMeasurement()
+  {
+    m_status.measurementInProgress = false;
+    m_hardware.resetMeasurement();
+  }
+
+  ScopedMeasurement(const ScopedMeasurement&) = delete;
+  ScopedMeasurement& operator=(const ScopedMeasurement&) = delete;
+
+private:
+  SystemStatus& m_status;
+  IRedPitayaHardware& m_hardware;
+};
+
+} // namespace
+
 CommandHandler::CommandHandler(HardwareFactory hardwareFactory,
                                BoardFactory boardFactory,
                                int measurementTimeoutMs)
@@ -471,31 +500,23 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to load signal to FPGA");
   }
 
-  m_status.measurementInProgress = true;
+  ScopedMeasurement measurement(m_status, *m_hardware);
   if (!m_hardware->startMeasurement(static_cast<uint32_t>(numSamples), 0))
   {
-    m_status.measurementInProgress = false;
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to start measurement");
   }
 
   // Wait for completion (blocking)
   if (!_waitForMeasurement())
   {
-    m_status.measurementInProgress = false;
-    m_hardware->resetMeasurement();
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Measurement timeout");
   }
 
   std::vector<float> acquired(static_cast<size_t>(numSamples));
   if (!m_hardware->getAcquiredSignal(acquired))
   {
-    m_status.measurementInProgress = false;
-    m_hardware->resetMeasurement();
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to read acquired data");
   }
-
-  m_status.measurementInProgress = false;
-  m_hardware->resetMeasurement();
 
   // Compute FFT
   m_fftProcessor->applyWindow(acquired);
@@ -599,7 +620,7 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
                                   std::to_string(dec));
   }
 
-  double pointsEstimate = std::ceil((stopKHz - startKHz) / stepKHz) + 1.0;
+  double pointsEstimate = std::floor((stopKHz - startKHz) / stepKHz) + 1.0;
   if (pointsEstimate > static_cast<double>(ServerConfig::MAX_SWEEP_POINTS))
   {
     std::ostringstream oss;
@@ -621,7 +642,7 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
 
   // Use a fixed number of samples for each single-frequency measurement
   const uint32_t sweepSamples = 8192;
-  m_status.measurementInProgress = true;
+  ScopedMeasurement measurement(m_status, *m_hardware);
 
   std::vector<SpectrumPoint> spectrum;
   spectrum.reserve(numPoints);
@@ -635,22 +656,18 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
 
     if (!m_hardware->loadGenerationSignal(signal))
     {
-      m_status.measurementInProgress = false;
       return buildErrorResponse(ResponseStatus::ERR_HARDWARE,
                                 "Failed to load signal at " + std::to_string(freqKHz) + " kHz");
     }
 
     if (!m_hardware->startMeasurement(sweepSamples, 0))
     {
-      m_status.measurementInProgress = false;
       return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to start measurement at " +
                                                                   std::to_string(freqKHz) + " kHz");
     }
 
     if (!_waitForMeasurement())
     {
-      m_status.measurementInProgress = false;
-      m_hardware->resetMeasurement();
       return buildErrorResponse(ResponseStatus::ERR_HARDWARE,
                                 "Measurement timeout at " + std::to_string(freqKHz) + " kHz");
     }
@@ -658,7 +675,6 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
     std::vector<float> acquired(sweepSamples);
     if (!m_hardware->getAcquiredSignal(acquired))
     {
-      m_status.measurementInProgress = false;
       return buildErrorResponse(ResponseStatus::ERR_HARDWARE,
                                 "Failed to read data at " + std::to_string(freqKHz) + " kHz");
     }
@@ -684,8 +700,6 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
 
     m_hardware->resetMeasurement();
   }
-
-  m_status.measurementInProgress = false;
 
   return buildSpectrumResponse(spectrum);
 }
