@@ -141,6 +141,12 @@ TEST(FftProcessorTest, FrequencyAxisMatchesSamplingTheorem)
   EXPECT_NEAR(axis[10], 10.0 * c_Fs / N, 1e-3f);
 }
 
+TEST(FftProcessorTest, FrequencyAxisZeroSamplesThrows)
+{
+  FFTProcessor fft(c_Fs);
+  EXPECT_THROW(fft.getFrequencyAxis(0), std::invalid_argument);
+}
+
 TEST(FftProcessorTest, PlanReusedAcrossCallsAndSizes)
 {
   const uint32_t N = 512;
