@@ -194,7 +194,7 @@ std::string CommandHandler::_handleSystInit(const ParsedCommand& cmd)
 
   // Initialize signal generator with current decimation
   m_status.currentDecimation = m_hardware->getDecimation();
-  double samplingFreq = 125000000.0 / m_status.currentDecimation;
+  double samplingFreq = ServerConfig::ADC_SAMPLE_RATE_HZ / m_status.currentDecimation;
   m_signalGen = std::make_unique<SignalGenerator>(samplingFreq, m_status.currentDecimation);
 
   m_status.hardwareInitialized = true;
@@ -407,9 +407,18 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
   int decimation = 64;
   float amplitude = 1.0f;
 
-  cmd.getArgInt(2, numSamples);
-  cmd.getArgInt(3, decimation);
-  cmd.getArgFloat(4, amplitude);
+  if (cmd.args.size() > 2 && !cmd.getArgInt(2, numSamples))
+  {
+    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, "num_samples must be an integer");
+  }
+  if (cmd.args.size() > 3 && !cmd.getArgInt(3, decimation))
+  {
+    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, "decimation must be an integer");
+  }
+  if (cmd.args.size() > 4 && !cmd.getArgFloat(4, amplitude))
+  {
+    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, "amplitude must be a finite number");
+  }
 
   if (!_validateSampleCount(numSamples, error))
     return error;
@@ -429,6 +438,18 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
   }
 
   uint16_t dec = static_cast<uint16_t>(decimation);
+  double centerHz = centerKHz * 1000.0;
+  double bandwidthHz = bandwidthKHz * 1000.0;
+  double nyquistHz = ServerConfig::ADC_SAMPLE_RATE_HZ / (2.0 * dec);
+
+  if (centerHz + bandwidthHz / 2.0 >= nyquistHz)
+  {
+    return buildErrorResponse(ResponseStatus::ERR_PARAM,
+                              "excitation band exceeds Nyquist (" +
+                                  std::to_string(nyquistHz / 1000.0) + " kHz) at decimation " +
+                                  std::to_string(dec));
+  }
+
   if (!m_hardware->setDecimation(dec))
   {
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to set decimation");
@@ -436,13 +457,10 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
   m_status.currentDecimation = dec;
 
   // Recreate signal processing chain with updated sampling frequency
-  double samplingFreq = 125000000.0 / dec;
+  double samplingFreq = ServerConfig::ADC_SAMPLE_RATE_HZ / dec;
   m_signalGen = std::make_unique<SignalGenerator>(samplingFreq, dec);
   m_fftProcessor = std::make_unique<FFTProcessor>(samplingFreq);
   m_resonanceAnalyzer = std::make_unique<ResonanceAnalyzer>(samplingFreq);
-
-  double centerHz = centerKHz * 1000.0;
-  double bandwidthHz = bandwidthKHz * 1000.0;
 
   auto signal = m_signalGen->generateSincSignal(static_cast<uint32_t>(numSamples),
                                                 static_cast<uint32_t>(centerHz),
@@ -531,9 +549,18 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
   int decimation = 64;
   float amplitude = 1.0f;
 
-  cmd.getArgFloat(2, stepKHz);
-  cmd.getArgInt(3, decimation);
-  cmd.getArgFloat(4, amplitude);
+  if (cmd.args.size() > 2 && !cmd.getArgFloat(2, stepKHz))
+  {
+    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, "step_kHz must be a finite number");
+  }
+  if (cmd.args.size() > 3 && !cmd.getArgInt(3, decimation))
+  {
+    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, "decimation must be an integer");
+  }
+  if (cmd.args.size() > 4 && !cmd.getArgFloat(4, amplitude))
+  {
+    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, "amplitude must be a finite number");
+  }
 
   // Validate
   if (!_validateDecimation(decimation, error))
@@ -556,15 +583,7 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
   }
 
   uint16_t dec = static_cast<uint16_t>(decimation);
-  if (!m_hardware->setDecimation(dec))
-  {
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to set decimation");
-  }
-  m_status.currentDecimation = dec;
-
-  // Recreate signal generator with updated sampling frequency
-  double samplingFreq = 125000000.0 / dec;
-  m_signalGen = std::make_unique<SignalGenerator>(samplingFreq, dec);
+  double nyquistKHz = ServerConfig::ADC_SAMPLE_RATE_HZ / (2.0 * dec) / 1000.0;
 
   // Compute frequency range
   double startKHz = centerKHz - rangeKHz / 2.0;
@@ -572,14 +591,44 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
   if (startKHz < 0.0)
     startKHz = 0.0;
 
+  if (stopKHz >= nyquistKHz)
+  {
+    return buildErrorResponse(ResponseStatus::ERR_PARAM,
+                              "sweep stop frequency exceeds Nyquist (" +
+                                  std::to_string(nyquistKHz) + " kHz) at decimation " +
+                                  std::to_string(dec));
+  }
+
+  double pointsEstimate = std::ceil((stopKHz - startKHz) / stepKHz) + 1.0;
+  if (pointsEstimate > static_cast<double>(ServerConfig::MAX_SWEEP_POINTS))
+  {
+    std::ostringstream oss;
+    oss << "sweep would take " << pointsEstimate << " points (max "
+        << ServerConfig::MAX_SWEEP_POINTS << ")";
+    return buildErrorResponse(ResponseStatus::ERR_PARAM, oss.str());
+  }
+  size_t numPoints = static_cast<size_t>(pointsEstimate);
+
+  if (!m_hardware->setDecimation(dec))
+  {
+    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to set decimation");
+  }
+  m_status.currentDecimation = dec;
+
+  // Recreate signal generator with updated sampling frequency
+  double samplingFreq = ServerConfig::ADC_SAMPLE_RATE_HZ / dec;
+  m_signalGen = std::make_unique<SignalGenerator>(samplingFreq, dec);
+
   // Use a fixed number of samples for each single-frequency measurement
   const uint32_t sweepSamples = 8192;
   m_status.measurementInProgress = true;
 
   std::vector<SpectrumPoint> spectrum;
+  spectrum.reserve(numPoints);
 
-  for (double freqKHz = startKHz; freqKHz <= stopKHz; freqKHz += stepKHz)
+  for (size_t point = 0; point < numPoints; ++point)
   {
+    double freqKHz = startKHz + static_cast<double>(point) * stepKHz;
     double freqHz = freqKHz * 1000.0;
 
     auto signal = m_signalGen->generateSineWave(sweepSamples, freqHz, amplitude);

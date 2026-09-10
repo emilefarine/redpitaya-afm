@@ -28,6 +28,12 @@ struct ServerConfig
   // FPGA constraint: decimation must be power-of-two in [16, 1024]
   static constexpr uint16_t MIN_DECIMATION = 16;
   static constexpr uint16_t MAX_DECIMATION = 1024;
+
+  // ADC sample rate of the Red Pitaya STEMlab 125-14
+  static constexpr double ADC_SAMPLE_RATE_HZ = 125000000.0;
+
+  // Upper bound on the number of points in a MEASURE:SWEEP
+  static constexpr size_t MAX_SWEEP_POINTS = 4096;
 };
 
 // clang-format off

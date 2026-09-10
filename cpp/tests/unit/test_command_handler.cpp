@@ -315,6 +315,51 @@ TEST_F(CommandHandlerTest, MeasCommandsRejectNonFiniteArguments)
   EXPECT_NE(send("MEASURE:SWEEP inf,10").find("ERR_SYNTAX"), std::string::npos);
 }
 
+TEST_F(CommandHandlerTest, MeasSincRejectsBandAboveNyquist)
+{
+  initHardware(true);
+
+  EXPECT_CALL(*m_rawHw, setDecimation(_)).Times(0);
+
+  // Default decimation 64 -> Nyquist 976.56 kHz
+  EXPECT_NE(send("MEASURE:SINC 3900,200").find("ERR_PARAM"), std::string::npos);
+  // Hardcoded values used to trigger undefined float-to-int conversion
+  EXPECT_NE(send("MEASURE:SINC 1e9,1").find("ERR_PARAM"), std::string::npos);
+  // decimation 16 -> Nyquist 3906.25 kHz; band edge 4000 kHz exceeds it
+  EXPECT_NE(send("MEASURE:SINC 3800,400,8192,16").find("ERR_PARAM"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, MeasCommandsRejectInvalidOptionalArguments)
+{
+  initHardware(true);
+
+  EXPECT_NE(send("MEASURE:SINC 200,100,abc").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("MEASURE:SINC 200,100,8192,64,nan").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("MEASURE:SWEEP 200,10,1,64,inf").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("MEASURE:SWEEP 200,10,1,notadec").find("ERR_SYNTAX"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, SweepRejectsStopFrequencyAboveNyquist)
+{
+  initHardware(true);
+
+  EXPECT_CALL(*m_rawHw, setDecimation(_)).Times(0);
+
+  EXPECT_NE(send("MEASURE:SWEEP 3900,200").find("ERR_PARAM"), std::string::npos);
+  EXPECT_NE(send("MEASURE:SWEEP 200,2000").find("ERR_PARAM"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, SweepRejectsTooManyPoints)
+{
+  initHardware(true);
+
+  EXPECT_CALL(*m_rawHw, setDecimation(_)).Times(0);
+
+  std::string resp = send("MEASURE:SWEEP 200,10,0.0001");
+  EXPECT_NE(resp.find("ERR_PARAM"), std::string::npos);
+  EXPECT_NE(resp.find("4096"), std::string::npos);
+}
+
 TEST_F(CommandHandlerTest, MeasSincSucceeds)
 {
   initHardware(true);
