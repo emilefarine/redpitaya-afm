@@ -25,6 +25,7 @@
 #define ELECTRONIC_BOARD_UART_H
 
 #include "../Common/LineBuffer.h"
+#include "BoardProtocol.h"
 #include "IElectronicBoard.h"
 
 #include <cstdint>
@@ -127,6 +128,7 @@ private:
   int m_fd; // File descriptor for UART
   std::string m_lastError;
   LineBuffer m_lineBuffer;
+  BoardProtocol m_protocol;
 };
 
 #endif // ELECTRONIC_BOARD_UART_H

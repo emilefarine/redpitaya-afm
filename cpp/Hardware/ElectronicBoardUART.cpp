@@ -19,6 +19,21 @@ ElectronicBoardUART::ElectronicBoardUART(const std::string& devicePath, uint32_t
     , m_baudRate(baudRate)
     , m_fd(-1)
     , m_lineBuffer(MAX_RECV_BUFFER)
+    , m_protocol(
+          [this](const std::string& data) -> bool
+          {
+            ssize_t written = write(m_fd, data.c_str(), data.length());
+            if (written != static_cast<ssize_t>(data.length()))
+            {
+              m_lastError = "Write failed: " + std::string(std::strerror(errno));
+              return false;
+            }
+            tcdrain(m_fd);
+            return true;
+          },
+          [this](std::string& line, uint32_t timeoutMs) -> bool
+          { return _readLine(line, timeoutMs); },
+          m_lastError)
 {
 }
 
@@ -222,84 +237,9 @@ bool ElectronicBoardUART::_sendCommand(const std::string& command,
   }
 
   // NOTE: We intentionally do NOT call tcflush() here.
-  // The persistent m_recvBuffer may contain valid data from a previous read
+  // The persistent line buffer may contain valid data from a previous read
   // that would be lost if we flushed the OS buffer.
-
-  // Send command with newline terminator
-  std::string cmdWithTerminator = command + "\n";
-  ssize_t written = write(m_fd, cmdWithTerminator.c_str(), cmdWithTerminator.length());
-
-  if (written != static_cast<ssize_t>(cmdWithTerminator.length()))
-  {
-    m_lastError = "Write failed: " + std::string(std::strerror(errno));
-    return false;
-  }
-
-  // Wait for data to be transmitted
-  tcdrain(m_fd);
-
-  // Read response lines, skipping any echo from the LPC1114.
-  // The board may echo the sent command before replying with OK or ERR:.
-  // For the STATUS command, collect multi-line data before the final OK.
-  bool isStatusCmd = (command == "STATUS");
-  std::string statusAccum;
-  bool statusHasData = false;
-
-  std::string line;
-  while (_readLine(line, timeoutMs))
-  {
-    // Success response
-    if (line.find("OK") == 0)
-    {
-      if (response)
-      {
-        if (isStatusCmd && statusHasData)
-        {
-          *response = statusAccum;
-        }
-        else
-        {
-          *response = line;
-        }
-      }
-      return true;
-    }
-
-    // Error response
-    if (line.find("ERR:") == 0)
-    {
-      m_lastError = line.substr(4);
-      return false;
-    }
-
-    // For STATUS command, accumulate non-OK/non-ERR lines as data
-    if (isStatusCmd)
-    {
-      if (statusHasData)
-      {
-        statusAccum += "\n" + line;
-      }
-      else
-      {
-        statusAccum = line;
-        statusHasData = true;
-      }
-      // Use shorter timeout for continuation lines
-      timeoutMs = 200;
-      continue;
-    }
-
-    // Otherwise, this is likely an echo of the sent command, skip it
-    // and use a shorter timeout for the actual response
-    timeoutMs = 500;
-  }
-
-  // If we get here, we timed out without receiving OK or ERR:
-  if (m_lastError.empty())
-  {
-    m_lastError = "No response from board";
-  }
-  return false;
+  return m_protocol.sendCommand(command, response, timeoutMs);
 }
 
 bool ElectronicBoardUART::_readLine(std::string& line, uint32_t timeoutMs)

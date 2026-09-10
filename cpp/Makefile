@@ -61,9 +61,11 @@ HOST_UNITTEST   = $(HOST_BUILD_DIR)/unit_tests.exe
 HOST_SRCS  = $(SIGNAL_DIR)/SignalGenerator.cpp \
              $(SIGNAL_DIR)/FFTProcessor.cpp \
              $(SIGNAL_DIR)/ResonanceAnalyzer.cpp \
+             $(HARDWARE_DIR)/BoardProtocol.cpp \
              $(SERVER_DIR)/CommandHandler.cpp
 
 HOST_OBJS      = $(patsubst $(SIGNAL_DIR)/%.cpp,$(HOST_OBJ_DIR)/%.o,$(filter $(SIGNAL_DIR)/%,$(HOST_SRCS))) \
+                 $(patsubst $(HARDWARE_DIR)/%.cpp,$(HOST_OBJ_DIR)/%.o,$(filter $(HARDWARE_DIR)/%,$(HOST_SRCS))) \
                  $(patsubst $(SERVER_DIR)/%.cpp,$(HOST_OBJ_DIR)/%.o,$(filter $(SERVER_DIR)/%,$(HOST_SRCS)))
 UNITTEST_SRCS  = $(wildcard $(UNITTEST_DIR)/*.cpp)
 
@@ -75,7 +77,8 @@ HOST_LDLIBS   = -lgtest_main -lgmock -lgtest -lfftw3f -lpthread
 SIGNAL_PROCESSING_OBJS = $(SIGNAL_DIR)/SignalGenerator.o $(SIGNAL_DIR)/FFTProcessor.o $(SIGNAL_DIR)/ResonanceAnalyzer.o
 
 # Hardware abstraction layer objects (in Hardware folder)
-HARDWARE_OBJS = $(HARDWARE_DIR)/RedPitayaHardware.o $(HARDWARE_DIR)/ElectronicBoardUART.o
+HARDWARE_OBJS = $(HARDWARE_DIR)/RedPitayaHardware.o $(HARDWARE_DIR)/ElectronicBoardUART.o \
+                $(HARDWARE_DIR)/BoardProtocol.o
 
 # Server objects (in Server folder)
 SERVER_OBJS = $(SERVER_DIR)/TCPServer.o $(SERVER_DIR)/CommandHandler.o $(SERVER_DIR)/HardwareFactories.o
@@ -134,6 +137,9 @@ $(HOST_BUILD_DIR):
 $(HOST_OBJ_DIR)/%.o: $(SIGNAL_DIR)/%.cpp | $(HOST_OBJ_DIR)
 	$(HOST_CXX) -c $< $(HOST_CXXFLAGS) -o $@
 
+$(HOST_OBJ_DIR)/%.o: $(HARDWARE_DIR)/%.cpp | $(HOST_OBJ_DIR)
+	$(HOST_CXX) -c $< $(HOST_CXXFLAGS) -o $@
+
 $(HOST_OBJ_DIR)/%.o: $(SERVER_DIR)/%.cpp | $(HOST_OBJ_DIR)
 	$(HOST_CXX) -c $< $(HOST_CXXFLAGS) -o $@
 
@@ -149,7 +155,7 @@ coverage: $(HOST_UNITTEST)
 	$(RM) $(HOST_OBJ_DIR)/*.gcda $(HOST_BUILD_DIR)/*.gcda
 	$(HOST_UNITTEST)
 	mkdir -p $(HOST_COV_DIR)
-	gcovr --root . --filter $(SIGNAL_DIR)/ --filter Server/ --filter Common/ --filter Hardware/DacCodec.h \
+	gcovr --root . --filter $(SIGNAL_DIR)/ --filter Server/ --filter Common/ --filter Hardware/ \
 	      --print-summary --html-details $(HOST_COV_DIR)/index.html
 
 # Remove host test build artifacts (objects, coverage data, reports)
