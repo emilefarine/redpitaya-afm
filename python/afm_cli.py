@@ -19,16 +19,15 @@ Usage:
 
 import argparse
 import cmd
+import logging
+import math
 import sys
 import time
 from typing import Optional
 
 import numpy as np
 
-from afm_client import (
-    AFMClient, AFMError, AFMConnectionError, AFMCommandError, AFMTimeoutError,
-    GainSetting, SystemStatus, SpectrumData
-)
+from afm_client import AFMClient, AFMError, SpectrumData
 
 
 class AFMShell(cmd.Cmd):
@@ -56,7 +55,7 @@ class AFMShell(cmd.Cmd):
         try:
             response = self.client.send_command(line)
             print(f"OK: {response}" if response else "OK")
-        except AFMCommandError as e:
+        except AFMError as e:
             print(f"Error: {e}")
 
     def emptyline(self):
@@ -231,9 +230,14 @@ class AFMShell(cmd.Cmd):
             dec = int(args[3]) if len(args) > 3 else 64
             amp = float(args[4]) if len(args) > 4 else 1.0
 
-            num_steps = int(range_kHz / step) + 1
+            num_steps = 0
+            if math.isfinite(range_kHz) and math.isfinite(step) and step > 0:
+                ratio = range_kHz / step
+                if math.isfinite(ratio) and ratio >= 0:
+                    num_steps = int(ratio) + 1
+            steps_text = f"{num_steps} points" if num_steps else "unknown points"
             print(f"Sweep measurement: center={center} kHz, range={range_kHz} kHz, "
-                  f"step={step} kHz ({num_steps} points)")
+                  f"step={step} kHz ({steps_text})")
             print(f"  decimation={dec}, amplitude={amp}")
             print("Sweeping...", end="", flush=True)
 
@@ -255,6 +259,8 @@ class AFMShell(cmd.Cmd):
     def _print_spectrum_summary(spectrum: SpectrumData):
         """Print summary of spectrum data"""
         print(f"  Points:         {spectrum.num_points}")
+        if spectrum.num_points == 0:
+            return
         print(f"  Freq range:     {spectrum.freq_kHz[0]:.3f} - {spectrum.freq_kHz[-1]:.3f} kHz")
         peak_idx = int(np.argmax(spectrum.magnitude))
         print(f"  Peak frequency: {spectrum.freq_kHz[peak_idx]:.3f} kHz")
@@ -271,7 +277,16 @@ class AFMShell(cmd.Cmd):
             return
 
         args = arg.split()
-        count = int(args[0]) if args else 10
+        count = 10
+        if args:
+            try:
+                count = int(args[0])
+            except ValueError:
+                print("Error: count must be an integer")
+                return
+            if count < 0:
+                print("Error: count must be >= 0")
+                return
         count = min(count, self._last_spectrum.num_points)
 
         print(f"First {count} of {self._last_spectrum.num_points} points:")
@@ -394,12 +409,14 @@ Examples:
 
     args = parser.parse_args()
 
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
+
     # Connect to server
     print(f"Connecting to {args.host}:{args.port}...")
     try:
         client = AFMClient(args.host, args.port)
         client.connect()
-    except AFMConnectionError as e:
+    except AFMError as e:
         print(f"Connection failed: {e}")
         sys.exit(1)
 
@@ -409,7 +426,7 @@ Examples:
             try:
                 response = client.send_command(args.command)
                 print(f"OK: {response}" if response else "OK")
-            except AFMCommandError as e:
+            except AFMError as e:
                 print(f"Error: {e}")
                 sys.exit(1)
 
@@ -417,7 +434,7 @@ Examples:
             # Script mode - stop on error by default for safety
             error_count = 0
             try:
-                with open(args.script, 'r') as f:
+                with open(args.script, 'r', encoding='utf-8') as f:
                     for line_num, line in enumerate(f, 1):
                         line = line.strip()
                         if not line or line.startswith('#'):
@@ -426,13 +443,13 @@ Examples:
                         try:
                             response = client.send_command(line)
                             print(f"  OK: {response}" if response else "  OK")
-                        except AFMCommandError as e:
+                        except AFMError as e:
                             print(f"  Error: {e}")
                             error_count += 1
                             if not args.continue_on_error:
                                 print("\nScript aborted due to error. Use --continue-on-error to ignore errors.")
                                 sys.exit(1)
-            except IOError as e:
+            except (OSError, UnicodeDecodeError) as e:
                 print(f"Error reading script: {e}")
                 sys.exit(1)
             

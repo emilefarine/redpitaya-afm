@@ -32,17 +32,21 @@ Usage:
     client.disconnect()
 """
 
+import logging
+import math
+import re
 import socket
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Union
-import logging
 
 import numpy as np
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Library code must not configure the root logger; applications set that up.
 logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 
 class AFMError(Exception):
@@ -56,7 +60,23 @@ class AFMConnectionError(AFMError):
 
 
 class AFMCommandError(AFMError):
-    """Command execution errors"""
+    """Command execution errors reported by the server as ERR_*."""
+
+    def __init__(self, response: str):
+        super().__init__(response)
+        self.response = response
+        match = re.match(r'^(ERR_[A-Z_]+)(?::\s*(.*))?$', response)
+        self.status = match.group(1) if match else None
+        self.message = (match.group(2) or "") if match else response
+
+
+class AFMProtocolError(AFMError):
+    """Malformed or oversized response that breaks the wire protocol."""
+    pass
+
+
+class AFMBusyError(AFMError):
+    """Another command or measurement is already using this connection."""
     pass
 
 
@@ -91,8 +111,6 @@ class BoardStatus:
     @classmethod
     def from_response(cls, response: str) -> 'BoardStatus':
         """Parse the multi-line MUX status block printed by the board."""
-        import re
-
         status = cls()
         for line in response.splitlines():
             line = line.strip()
@@ -146,7 +164,10 @@ class SystemStatus:
                 elif key == 'BUSY':
                     status.measurement_in_progress = value == '1'
                 elif key == 'DEC':
-                    status.decimation = int(value)
+                    try:
+                        status.decimation = int(value)
+                    except ValueError:
+                        pass
 
         return status
 
@@ -155,13 +176,22 @@ class AFMClient:
     """
     Client for communicating with the AFM measurement server on Red Pitaya.
 
-    Thread-safe for basic operations. For concurrent access to measurements,
-    external synchronization is recommended.
+    Commands are serialized with a non-blocking lock: concurrent callers get
+    ``AFMBusyError`` instead of interleaving bytes on the shared socket. A
+    measurement holds the lock for its full duration, so UIs must not issue
+    other commands while one is running. ``disconnect()`` may be called from
+    any thread to abort an in-flight operation.
     """
 
     DEFAULT_PORT = 5025
     DEFAULT_TIMEOUT = 10.0
     RECV_BUFFER_SIZE = 65536
+    MAX_LINE_BYTES = 1 << 20
+    MAX_SPECTRUM_ROWS = 65536
+    MAX_SPECTRUM_BYTES = 8 << 20
+    # Mirrors AFM::ServerConfig::MAX_SWEEP_POINTS in cpp/Server/Protocol.h
+    MAX_SWEEP_POINTS = 4096
+    MAX_BOARD_STATUS_LINES = 256
 
     def __init__(self,
                  host: str,
@@ -180,6 +210,7 @@ class AFMClient:
         self.timeout = timeout
         self._socket: Optional[socket.socket] = None
         self._recv_buffer: bytes = b""  # Keep as bytes for binary safety
+        self._lock = threading.Lock()
 
     @property
     def is_connected(self) -> bool:
@@ -204,28 +235,40 @@ class AFMClient:
             self._socket.settimeout(self.timeout)
             self._socket.connect((self.host, self.port))
             self._recv_buffer = b""
+        except socket.error as e:
+            self._socket = None
+            raise AFMConnectionError(f"Failed to connect to {self.host}:{self.port}: {e}")
 
+        try:
             # Read welcome message
             welcome = self._read_line()
             logger.info(f"Connected to {self.host}:{self.port}")
             logger.info(f"Server: {welcome}")
             return welcome
-
-        except socket.error as e:
-            self._socket = None
-            raise AFMConnectionError(f"Failed to connect to {self.host}:{self.port}: {e}")
+        except AFMError as e:
+            self.disconnect()
+            raise AFMConnectionError(
+                f"Failed to read welcome from {self.host}:{self.port}: {e}")
 
     def disconnect(self) -> None:
-        """Disconnect from the server"""
-        if self._socket:
-            try:
-                self._socket.close()
-            except socket.error:
-                pass
-            finally:
-                self._socket = None
-                self._recv_buffer = b""
-                logger.info("Disconnected from server")
+        """Disconnect from the server.
+
+        Safe to call from another thread; it aborts any in-flight read by
+        closing the socket, which surfaces there as AFMConnectionError.
+        """
+        sock, self._socket = self._socket, None
+        if sock is None:
+            return
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            sock.close()
+        except OSError:
+            pass
+        self._recv_buffer = b""
+        logger.info("Disconnected from server")
 
     def __enter__(self):
         """Context manager entry"""
@@ -239,10 +282,15 @@ class AFMClient:
 
     # ------ Low-level communication --------
 
-    def _set_timeout(self, timeout: float) -> None:
-        """Temporarily change socket timeout."""
-        if self._socket:
-            self._socket.settimeout(timeout)
+    @contextmanager
+    def _transaction(self):
+        """Hold the command lock for one complete request/response cycle."""
+        if not self._lock.acquire(blocking=False):
+            raise AFMBusyError("Another command or measurement is in progress")
+        try:
+            yield
+        finally:
+            self._lock.release()
 
     def _flush_buffer(self) -> None:
         """Drain any stale data from the receive buffer and socket.
@@ -252,28 +300,45 @@ class AFMClient:
         response to the next command.
         """
         self._recv_buffer = b""
-        if not self._socket:
+        sock = self._socket
+        if sock is None:
             return
-        # Drain anything sitting in the OS socket buffer
-        self._socket.setblocking(False)
+        # Drain anything sitting in the OS socket buffer. A concurrent
+        # disconnect() can close the socket under us; translate that to the
+        # same error callers get from a failed send or read.
+        try:
+            sock.setblocking(False)
+        except OSError as e:
+            self.disconnect()
+            raise AFMConnectionError(f"Receive failed: {e}")
         try:
             while True:
-                data = self._socket.recv(self.RECV_BUFFER_SIZE)
+                data = sock.recv(self.RECV_BUFFER_SIZE)
                 if not data:
                     break
         except (BlockingIOError, socket.error):
             pass
         finally:
-            self._socket.settimeout(self.timeout)
+            try:
+                sock.settimeout(self.timeout)
+            except OSError:
+                pass
 
     def _send(self, command: str) -> None:
         """Send a command to the server"""
-        if not self._socket:
+        sock = self._socket
+        if sock is None:
             raise AFMConnectionError("Not connected")
 
+        if "\n" in command or "\r" in command:
+            raise AFMCommandError("Command must be a single line")
         try:
-            message = command + "\n"
-            self._socket.sendall(message.encode('ascii'))
+            message = (command + "\n").encode('ascii')
+        except UnicodeEncodeError:
+            raise AFMCommandError("Command contains non-ASCII characters")
+
+        try:
+            sock.sendall(message)
             logger.debug(f"Sent: {command}")
         except socket.error as e:
             self.disconnect()
@@ -293,22 +358,31 @@ class AFMClient:
         if not self._socket:
             raise AFMConnectionError("Not connected")
 
-        prev_timeout = self._socket.gettimeout()
-        if timeout_override is not None:
-            self._socket.settimeout(timeout_override)
+        sock = self._socket
+        prev_timeout = sock.gettimeout()
 
         try:
+            if timeout_override is not None:
+                sock.settimeout(timeout_override)
+
             # Look for newline in bytes buffer
             while b'\n' not in self._recv_buffer:
-                data = self._socket.recv(self.RECV_BUFFER_SIZE)
+                data = sock.recv(self.RECV_BUFFER_SIZE)
                 if not data:
                     self.disconnect()
                     raise AFMConnectionError("Connection closed by server")
                 self._recv_buffer += data
+                if len(self._recv_buffer) > self.MAX_LINE_BYTES:
+                    self.disconnect()
+                    raise AFMProtocolError(
+                        f"Response line exceeds {self.MAX_LINE_BYTES} bytes")
 
             # Split on newline, decode only the line portion
             line_bytes, self._recv_buffer = self._recv_buffer.split(b'\n', 1)
-            line = line_bytes.decode('ascii').rstrip('\r')
+            try:
+                line = line_bytes.decode('ascii').rstrip('\r')
+            except UnicodeDecodeError:
+                raise AFMProtocolError("Response line is not ASCII text")
             logger.debug(f"Received: {line}")
             return line
 
@@ -318,8 +392,11 @@ class AFMClient:
             self.disconnect()
             raise AFMConnectionError(f"Receive failed: {e}")
         finally:
-            if timeout_override is not None and self._socket:
-                self._socket.settimeout(prev_timeout)
+            if timeout_override is not None and sock.fileno() >= 0:
+                try:
+                    sock.settimeout(prev_timeout)
+                except OSError:
+                    pass
 
     def _read_exact(self, num_bytes: int,
                     timeout_override: Optional[float] = None) -> bytes:
@@ -335,16 +412,20 @@ class AFMClient:
             timeout_override: If set, temporarily use this timeout (seconds)
                               for the duration of this read, then restore.
         """
+        if num_bytes < 0:
+            raise AFMProtocolError(f"Invalid byte count: {num_bytes}")
         if not self._socket:
             raise AFMConnectionError("Not connected")
 
-        prev_timeout = self._socket.gettimeout()
-        if timeout_override is not None:
-            self._socket.settimeout(timeout_override)
+        sock = self._socket
+        prev_timeout = sock.gettimeout()
 
         try:
+            if timeout_override is not None:
+                sock.settimeout(timeout_override)
+
             while len(self._recv_buffer) < num_bytes:
-                data = self._socket.recv(self.RECV_BUFFER_SIZE)
+                data = sock.recv(self.RECV_BUFFER_SIZE)
                 if not data:
                     self.disconnect()
                     raise AFMConnectionError("Connection closed by server")
@@ -360,8 +441,11 @@ class AFMClient:
             self.disconnect()
             raise AFMConnectionError(f"Receive failed: {e}")
         finally:
-            if timeout_override is not None and self._socket:
-                self._socket.settimeout(prev_timeout)
+            if timeout_override is not None and sock.fileno() >= 0:
+                try:
+                    sock.settimeout(prev_timeout)
+                except OSError:
+                    pass
 
     def _execute(self, command: str) -> tuple[bool, str]:
         """
@@ -381,9 +465,16 @@ class AFMClient:
         self._send(command)
         response = self._read_line()
 
-        if response.startswith("OK"):
+        if response == "OK" or response.startswith("OK "):
             # Extract data after "OK "
             data = response[3:] if len(response) > 3 else ""
+            if data.startswith("DATA "):
+                # Drain the payload so the stream stays in sync, then tell the
+                # caller to use the typed measurement API.
+                self._discard_spectrum_payload(data)
+                raise AFMProtocolError(
+                    "Server returned a spectrum response; use measure_sinc() "
+                    "or measure_sweep() to read it")
             return True, data
         elif response.startswith("ERR"):
             return False, response
@@ -402,8 +493,10 @@ class AFMClient:
 
         Raises:
             AFMCommandError: If command fails
+            AFMBusyError: If another command or measurement is in progress
         """
-        success, data = self._execute(command)
+        with self._transaction():
+            success, data = self._execute(command)
         if not success:
             raise AFMCommandError(data)
         return data
@@ -419,8 +512,8 @@ class AFMClient:
 
         if header.startswith("ERR"):
             raise AFMCommandError(header)
-        if not header.startswith("OK"):
-            raise AFMCommandError(f"Unexpected board status header: {header}")
+        if header != "OK" and not header.startswith("OK "):
+            raise AFMProtocolError(f"Unexpected board status header: {header}")
 
         lines: list[str] = []
 
@@ -437,6 +530,8 @@ class AFMClient:
             lines.append(line)
             if line == "==================":
                 break
+            if len(lines) > self.MAX_BOARD_STATUS_LINES:
+                raise AFMProtocolError("Board status block has no terminator")
 
         return "\n".join(lines)
 
@@ -459,7 +554,8 @@ class AFMClient:
         Test connection to server.
 
         Returns:
-            True if server responds with PONG
+            True if server responds with PONG. A server error reply counts
+            as no response; AFMBusyError and connection errors propagate.
         """
         try:
             response = self.send_command("SYSTEM:PING")
@@ -490,15 +586,22 @@ class AFMClient:
         return self.send_command("SYSTEM:DEINIT")
 
     def shutdown(self) -> None:
-        """Shutdown the server"""
+        """Shutdown the server.
+
+        Raises:
+            AFMBusyError: If a measurement or command is in progress; the
+                connection is left open so shutdown can be retried.
+        """
         try:
-            self._send("SYSTEM:SHUTDOWN")
-            # Server will close connection
-            self._read_line()
+            with self._transaction():
+                self._send("SYSTEM:SHUTDOWN")
+                # Server will close connection
+                self._read_line()
+        except AFMBusyError:
+            raise
         except AFMError:
             pass
-        finally:
-            self.disconnect()
+        self.disconnect()
 
     # ------ Electronic Board Commands --------
 
@@ -542,15 +645,58 @@ class AFMClient:
 
     def get_board_status(self) -> str:
         """Get electronic board status as a multi-line text block."""
-        self._flush_buffer()
-        self._send("BOARD:STATUS?")
-        return self._read_board_status_response()
+        with self._transaction():
+            self._flush_buffer()
+            self._send("BOARD:STATUS?")
+            return self._read_board_status_response()
 
     def get_board_state(self) -> BoardStatus:
         """Get electronic board routing and gains as a parsed BoardStatus."""
         return BoardStatus.from_response(self.get_board_status())
 
     # ------ Measurement Commands --------
+
+    def _parse_spectrum_header(self, header: str) -> tuple[int, Optional[int]]:
+        """Parse an 'OK DATA <rows> [<bytes>]' header.
+
+        Returns (num_rows, num_bytes); num_bytes is None for servers older
+        than 2.2.0 that omit the payload byte count.
+        """
+        parts = header.split()
+        if len(parts) < 3 or parts[0] != "OK" or parts[1] != "DATA":
+            raise AFMProtocolError(f"Unexpected spectrum header: {header}")
+        try:
+            num_rows = int(parts[2])
+            num_bytes = int(parts[3]) if len(parts) >= 4 else None
+        except ValueError:
+            raise AFMProtocolError(f"Malformed spectrum header: {header}")
+        if num_rows < 0 or num_rows > self.MAX_SPECTRUM_ROWS:
+            raise AFMProtocolError(f"Spectrum row count out of range: {num_rows}")
+        if num_bytes is not None and not 0 <= num_bytes <= self.MAX_SPECTRUM_BYTES:
+            raise AFMProtocolError(f"Spectrum byte count out of range: {num_bytes}")
+        return num_rows, num_bytes
+
+    def _discard_spectrum_payload(self, data: str) -> None:
+        """Consume a spectrum payload received in reply to a raw command."""
+        num_rows, num_bytes = self._parse_spectrum_header("OK " + data)
+        if num_bytes is not None:
+            self._read_exact(num_bytes)
+            return
+        for _ in range(num_rows):
+            self._read_line()
+
+    @staticmethod
+    def _parse_spectrum_row(line: str, index: int) -> tuple[float, float, float]:
+        """Parse one 'freq,magnitude,phase' row."""
+        values = line.split(',')
+        if len(values) != 3:
+            raise AFMProtocolError(
+                f"Malformed spectrum row {index}: expected 3 values, got {len(values)}"
+            )
+        try:
+            return float(values[0]), float(values[1]), float(values[2])
+        except ValueError:
+            raise AFMProtocolError(f"Malformed spectrum row {index}: {line!r}")
 
     def _read_spectrum_response(self, timeout: Optional[float] = None) -> SpectrumData:
         """Read a multi-line spectrum response.
@@ -574,22 +720,21 @@ class AFMClient:
         """
         header = self._read_line(timeout_override=timeout)
 
-        if not header.startswith("OK"):
+        if header.startswith("ERR"):
             raise AFMCommandError(header)
+        if not header.startswith("OK"):
+            raise AFMProtocolError(f"Unexpected spectrum header: {header}")
 
-        parts = header.split()
-        if len(parts) < 3 or parts[1] != "DATA":
-            raise AFMCommandError(f"Unexpected spectrum header: {header}")
-
-        num_rows = int(parts[2])
-        if num_rows <= 0:
-            raise AFMCommandError(f"Invalid row count: {num_rows}")
+        num_rows, num_bytes = self._parse_spectrum_header(header)
 
         # Fast path: header carries the payload byte count -> single bulk read.
-        if len(parts) >= 4:
-            num_bytes = int(parts[3])
+        if num_bytes is not None:
             payload = self._read_exact(num_bytes, timeout_override=timeout)
-            return self._parse_spectrum_payload(payload.decode('ascii'), num_rows)
+            try:
+                text = payload.decode('ascii')
+            except UnicodeDecodeError:
+                raise AFMProtocolError("Spectrum payload is not ASCII text")
+            return self._parse_spectrum_payload(text, num_rows)
 
         # Fallback: read the N rows line by line (server < 2.2.0).
         freq = np.empty(num_rows, dtype=np.float64)
@@ -598,19 +743,12 @@ class AFMClient:
 
         for i in range(num_rows):
             line = self._read_line(timeout_override=timeout)
-            values = line.split(',')
-            if len(values) != 3:
-                raise AFMCommandError(
-                    f"Malformed spectrum row {i}: expected 3 values, got {len(values)}"
-                )
-            freq[i] = float(values[0])
-            mag[i] = float(values[1])
-            phase[i] = float(values[2])
+            freq[i], mag[i], phase[i] = self._parse_spectrum_row(line, i)
 
         return SpectrumData(freq_kHz=freq, magnitude=mag, phase_rad=phase)
 
-    @staticmethod
-    def _parse_spectrum_payload(payload: str, num_rows: int) -> SpectrumData:
+    @classmethod
+    def _parse_spectrum_payload(cls, payload: str, num_rows: int) -> SpectrumData:
         """Parse a CSV spectrum payload (N rows of freq,magnitude,phase)."""
         lines = payload.split('\n')
         # A trailing '\n' on the last row produces a final empty element.
@@ -618,7 +756,7 @@ class AFMClient:
             lines.pop()
 
         if len(lines) != num_rows:
-            raise AFMCommandError(
+            raise AFMProtocolError(
                 f"Spectrum payload row count mismatch: header said {num_rows}, "
                 f"got {len(lines)}"
             )
@@ -628,14 +766,7 @@ class AFMClient:
         phase = np.empty(num_rows, dtype=np.float64)
 
         for i, line in enumerate(lines):
-            values = line.split(',')
-            if len(values) != 3:
-                raise AFMCommandError(
-                    f"Malformed spectrum row {i}: expected 3 values, got {len(values)}"
-                )
-            freq[i] = float(values[0])
-            mag[i] = float(values[1])
-            phase[i] = float(values[2])
+            freq[i], mag[i], phase[i] = cls._parse_spectrum_row(line, i)
 
         return SpectrumData(freq_kHz=freq, magnitude=mag, phase_rad=phase)
 
@@ -657,7 +788,7 @@ class AFMClient:
         Args:
             center_kHz: Center frequency in kHz
             bandwidth_kHz: Bandwidth in kHz
-            num_samples: Number of samples (1-32768, default 8192)
+            num_samples: Number of samples (1-65536, default 8192)
             decimation: FPGA decimation factor (power of 2, 16-1024, default 64)
             amplitude: Signal amplitude 0-1 (default 1.0)
 
@@ -667,12 +798,14 @@ class AFMClient:
         Raises:
             AFMCommandError: If measurement fails
             AFMTimeoutError: If server doesn't respond in time
+            AFMBusyError: If another command or measurement is in progress
         """
         cmd = (f"MEASURE:SINC {center_kHz},{bandwidth_kHz},"
                f"{num_samples},{decimation},{amplitude}")
-        self._flush_buffer()
-        self._send(cmd)
-        return self._read_spectrum_response()
+        with self._transaction():
+            self._flush_buffer()
+            self._send(cmd)
+            return self._read_spectrum_response()
 
     def measure_sweep(
         self,
@@ -702,19 +835,27 @@ class AFMClient:
         Raises:
             AFMCommandError: If measurement fails
             AFMTimeoutError: If server doesn't respond in time
+            AFMBusyError: If another command or measurement is in progress
         """
-        # Calculate dynamic timeout based on sweep parameters.
-        # Each frequency step takes roughly 1-2 seconds (load + acquire + compute).
-        num_steps = max(1, int(range_kHz / step_kHz) + 1) if step_kHz > 0 else 1
+        # Calculate dynamic timeout based on sweep parameters. The server caps
+        # sweeps at MAX_SWEEP_POINTS, so mirror that to bound the timeout even
+        # when the user passes a huge or non-finite range/step.
+        num_steps = 1
+        if math.isfinite(range_kHz) and math.isfinite(step_kHz) and step_kHz > 0:
+            ratio = range_kHz / step_kHz
+            if math.isfinite(ratio) and ratio >= 0:
+                num_steps = int(ratio) + 1
+        num_steps = min(max(num_steps, 1), self.MAX_SWEEP_POINTS)
         estimated_time = num_steps * 2.0
         sweep_timeout = max(self.timeout, estimated_time + 30.0)
         logger.info(f"Sweep: {num_steps} steps, timeout set to {sweep_timeout:.0f}s")
 
         cmd = (f"MEASURE:SWEEP {center_kHz},{range_kHz},"
                f"{step_kHz},{decimation},{amplitude}")
-        self._flush_buffer()
-        self._send(cmd)
-        return self._read_spectrum_response(timeout=sweep_timeout)
+        with self._transaction():
+            self._flush_buffer()
+            self._send(cmd)
+            return self._read_spectrum_response(timeout=sweep_timeout)
 
 # ------ Convenience Functions --------
 

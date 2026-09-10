@@ -464,7 +464,15 @@ class RoutingSchematicDialog(QDialog):
     # ---------------------------------------------------------------
     # State sync
     # ---------------------------------------------------------------
+    def set_client(self, client):
+        """Point the dialog at a connected client, or None when offline."""
+        self.client = client
+
     def refresh_state(self):
+        if self.client is None:
+            self.status_label.setText("Not connected")
+            self.status_label.setStyleSheet(f"color: {RED};")
+            return
         try:
             state = self.client.get_board_state()
         except AFMError as exc:

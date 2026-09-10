@@ -1,7 +1,9 @@
 import argparse
 import os
+import shlex
 import shutil
 import subprocess
+import sys
 import traceback
 from datetime import datetime
 from glob import glob
@@ -24,10 +26,16 @@ REDPITAYA_USER = "root"
 REDPITAYA_PASSWORD = "root"
 
 def run_remote(ssh, command):
-    """Run a command on the Red Pitaya; return (exit_status, stdout, stderr)."""
+    """Run a command on the Red Pitaya; return (exit_status, stdout, stderr).
+
+    Pipes are drained before waiting for the exit status so a command that
+    produces more output than the SSH channel window cannot deadlock.
+    """
     _, stdout, stderr = ssh.exec_command(command)
+    out = stdout.read().decode("utf-8", errors="replace").strip()
+    err = stderr.read().decode("utf-8", errors="replace").strip()
     exit_status = stdout.channel.recv_exit_status()
-    return exit_status, stdout.read().decode().strip(), stderr.read().decode().strip()
+    return exit_status, out, err
 
 def _is_build_artifact(rel_path):
     """Check if a remote file is a build artifact that should not be deleted during sync."""
@@ -39,8 +47,15 @@ def _is_build_artifact(rel_path):
         return True
     return False
 
-def sync_cpp_files(scp, ssh):
-    """Mirror the local C++ project to the Red Pitaya, deleting obsolete remote files."""
+def sync_cpp_files(scp, ssh) -> bool:
+    """Mirror the local C++ project to the Red Pitaya.
+
+    Deletes obsolete remote files (keeping build artifacts) and copies every
+    local file. Returns True when every file was copied and every obsolete
+    file was removed.
+    """
+    failures = 0
+
     print("Synchronizing C++ project files...")
 
     print("Scanning local files...")
@@ -59,7 +74,8 @@ def sync_cpp_files(scp, ssh):
     print(f"Found {len(local_files)} local files in {len(local_dirs)} directories")
 
     print("Scanning remote files...")
-    _, remote_files_output, _ = run_remote(ssh, f"find {REMOTE_PROJECT} -type f 2>/dev/null")
+    _, remote_files_output, _ = run_remote(
+        ssh, f"find {shlex.quote(REMOTE_PROJECT)} -type f 2>/dev/null")
 
     remote_files = set()
     if remote_files_output:
@@ -83,16 +99,31 @@ def sync_cpp_files(scp, ssh):
     if actual_deletes:
         print(f"Deleting {len(actual_deletes)} obsolete remote files...")
         for rel_path in actual_deletes:
-            run_remote(ssh, f"rm -f {REMOTE_PROJECT}/{rel_path}")
-            print(f"  Deleted: {rel_path}")
+            remote_path = shlex.quote(f"{REMOTE_PROJECT}/{rel_path}")
+            exit_status, _, err = run_remote(ssh, f"rm -f {remote_path}")
+            if exit_status != 0:
+                failures += 1
+                print(f"  Failed to delete {rel_path}: {err}")
+            else:
+                print(f"  Deleted: {rel_path}")
 
     if skipped_artifacts:
         print(f"Kept {len(skipped_artifacts)} build artifacts (out/, .o, .csv)")
 
     print("Creating remote directory structure...")
-    run_remote(ssh, f"mkdir -p {REMOTE_PROJECT}")
+    exit_status, _, err = run_remote(ssh, f"mkdir -p {shlex.quote(REMOTE_PROJECT)}")
+    if exit_status != 0:
+        failures += 1
+        print(f"  Failed to create {REMOTE_PROJECT}: {err}")
+    mkdir_failures = 0
     for rel_dir in local_dirs:
-        run_remote(ssh, f"mkdir -p {REMOTE_PROJECT}/{rel_dir}")
+        remote_dir = shlex.quote(f"{REMOTE_PROJECT}/{rel_dir}")
+        exit_status, _, _ = run_remote(ssh, f"mkdir -p {remote_dir}")
+        if exit_status != 0:
+            mkdir_failures += 1
+    if mkdir_failures:
+        failures += mkdir_failures
+        print(f"  Failed to create {mkdir_failures} remote directories")
 
     print("Copying files...")
     file_count = 0
@@ -106,11 +137,17 @@ def sync_cpp_files(scp, ssh):
             if file_count % 10 == 0:
                 print(f"  Copied {file_count}/{len(local_files)} files...")
         except Exception as e:
+            failures += 1
             print(f"Warning: Could not copy {rel_path}: {e}")
 
+    if failures:
+        print(f"Synchronization finished with {failures} failure(s)")
+        return False
+
     print(f"Synchronization complete: {file_count} files copied")
-    if files_to_delete:
-        print(f"Cleaned up: {len(files_to_delete)} obsolete files removed")
+    if actual_deletes:
+        print(f"Cleaned up: {len(actual_deletes)} obsolete files removed")
+    return True
 
 def find_bootgen():
     """Locate the bootgen executable (Vitis tool). Only needed to convert a raw .bit locally."""
@@ -233,7 +270,7 @@ def copy_bitfile(scp, ssh):
         return False
 
     print(f"\nCopying {os.path.basename(LOCAL_BITFILE_BIN)} to RedPitaya...")
-    run_remote(ssh, f"mkdir -p {REMOTE_FPGA_DIR}")
+    run_remote(ssh, f"mkdir -p {shlex.quote(REMOTE_FPGA_DIR)}")
 
     remote_bitfile_path = f"{REMOTE_FPGA_DIR}/red_pitaya_top.bit.bin"
     try:
@@ -249,7 +286,8 @@ def flash_bitfile(ssh):
     remote_bitfile_path = f"{REMOTE_FPGA_DIR}/red_pitaya_top.bit.bin"
 
     print("Checking if bitfile exists on Red Pitaya...")
-    exit_status, file_info, _ = run_remote(ssh, f"ls -la {remote_bitfile_path}")
+    exit_status, file_info, _ = run_remote(
+        ssh, f"ls -la {shlex.quote(remote_bitfile_path)}")
 
     if exit_status != 0:
         print(f"Error: Bitfile not found at {remote_bitfile_path}")
@@ -275,10 +313,10 @@ def flash_bitfile(ssh):
 
     if fpgautil_path:
         print(f"Found fpgautil at: {fpgautil_path}")
-        command = f"cd {REMOTE_FPGA_DIR} && {fpgautil_path} -b red_pitaya_top.bit.bin"
+        command = f"cd {shlex.quote(REMOTE_FPGA_DIR)} && {shlex.quote(fpgautil_path)} -b red_pitaya_top.bit.bin"
     else:
         print("Could not locate fpgautil. Trying with full environment...")
-        command = f"cd {REMOTE_FPGA_DIR} && bash -l -c 'fpgautil -b red_pitaya_top.bit.bin'"
+        command = f"cd {shlex.quote(REMOTE_FPGA_DIR)} && bash -l -c 'fpgautil -b red_pitaya_top.bit.bin'"
 
     print("Flashing bitfile to FPGA using fpgautil...")
     exit_status, output, error_output = run_remote(ssh, command)
@@ -322,7 +360,8 @@ def check_fpga_status(ssh):
 
     print("Bitfile Location:")
     remote_bitfile = f"{REMOTE_FPGA_DIR}/red_pitaya_top.bit.bin"
-    _, bitfile_info, _ = run_remote(ssh, f"ls -lh {remote_bitfile} 2>/dev/null")
+    _, bitfile_info, _ = run_remote(
+        ssh, f"ls -lh {shlex.quote(remote_bitfile)} 2>/dev/null")
 
     if bitfile_info:
         print(f"  {bitfile_info}")
@@ -492,6 +531,10 @@ def main():
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
+    exit_code = 0
+    copy_requested = args.bitfile or args.all or args.deploy
+    bitfile_ready = not copy_requested
+
     try:
         ssh.connect(args.host, username=REDPITAYA_USER, password=REDPITAYA_PASSWORD)
         print("Connected successfully.")
@@ -500,26 +543,40 @@ def main():
 
         with SCPClient(ssh.get_transport()) as scp:
             if args.cpp or args.all:
-                sync_cpp_files(scp, ssh)
+                if not sync_cpp_files(scp, ssh):
+                    exit_code = 1
 
-            if args.bitfile or args.all or args.deploy:
-                copy_bitfile(scp, ssh)
+            if copy_requested:
+                if copy_bitfile(scp, ssh):
+                    bitfile_ready = True
+                else:
+                    exit_code = 1
 
             if args.install_oled:
-                install_oled_service(scp, ssh)
+                if not install_oled_service(scp, ssh):
+                    exit_code = 1
 
         if args.flash or args.deploy or args.all:
-            flash_bitfile(ssh)
+            if not bitfile_ready:
+                print("Error: bitfile copy failed; skipping FPGA flash")
+            elif not flash_bitfile(ssh):
+                exit_code = 1
 
-        if args.status or args.deploy or args.all:
+        if exit_code == 0 and (args.status or args.deploy or args.all):
             check_fpga_status(ssh)
 
-        print("All operations done.")
+        if exit_code == 0:
+            print("All operations done.")
+        else:
+            print("Completed with errors.")
 
     except Exception as e:
         print(f"Error: {e}")
+        exit_code = 1
     finally:
         ssh.close()
 
+    return exit_code
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
