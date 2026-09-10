@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <sstream>
@@ -185,7 +186,7 @@ struct ParsedCommand
     const std::string& s = args[index];
     char* end = nullptr;
     value = std::strtof(s.c_str(), &end);
-    return end == s.c_str() + s.size();
+    return end == s.c_str() + s.size() && std::isfinite(value);
   }
 
   /**

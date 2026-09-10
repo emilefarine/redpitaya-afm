@@ -306,6 +306,15 @@ TEST_F(CommandHandlerTest, SweepHappyPathReturnsExpectedPointCount)
   EXPECT_EQ(bytes, resp.size() - resp.find('\n') - 1);
 }
 
+TEST_F(CommandHandlerTest, MeasCommandsRejectNonFiniteArguments)
+{
+  initHardware(true);
+
+  EXPECT_NE(send("MEASURE:SINC nan,1").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("MEASURE:SINC 200,nan").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("MEASURE:SWEEP inf,10").find("ERR_SYNTAX"), std::string::npos);
+}
+
 TEST_F(CommandHandlerTest, MeasSincSucceeds)
 {
   initHardware(true);
