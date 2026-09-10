@@ -193,9 +193,9 @@ int main(int argc, char* argv[])
     // Create command handler (must be declared before server so it outlives the server thread)
     AFM::OperatingMode mode =
         options.noBoard ? AFM::OperatingMode::RP_ONLY : AFM::OperatingMode::FULL;
-    auto commandHandler = std::make_unique<AFM::CommandHandler>(AFM::defaultHardwareFactory,
-                                                                AFM::defaultBoardFactory, 5000,
-                                                                mode);
+    auto commandHandler = std::make_unique<AFM::CommandHandler>(
+        AFM::defaultHardwareFactory, AFM::defaultBoardFactory,
+        AFM::CommandHandler::DEFAULT_MEASUREMENT_TIMEOUT_MS, mode);
 
     std::cout << "[Main] Operating mode: " << AFM::operatingModeToString(mode) << std::endl;
 

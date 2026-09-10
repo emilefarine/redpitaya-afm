@@ -42,6 +42,9 @@ struct SystemStatus
 class CommandHandler
 {
 public:
+  /** @brief Default timeout for blocking measurement waits */
+  static constexpr int DEFAULT_MEASUREMENT_TIMEOUT_MS = 5000;
+
   /**
    * @brief Construct a command handler
    * @param hardwareFactory Creates the Red Pitaya hardware on SYSTEM:INIT
@@ -51,7 +54,7 @@ public:
    */
   explicit CommandHandler(HardwareFactory hardwareFactory = defaultHardwareFactory,
                           BoardFactory boardFactory = defaultBoardFactory,
-                          int measurementTimeoutMs = 5000,
+                          int measurementTimeoutMs = DEFAULT_MEASUREMENT_TIMEOUT_MS,
                           OperatingMode mode = OperatingMode::FULL);
   ~CommandHandler();
 
