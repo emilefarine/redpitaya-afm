@@ -54,11 +54,13 @@ bool loadFpgaBitstream(const std::string& bitstreamPath)
 
   if (pid == 0)
   {
-    // Child process: execute fpgautil directly from known absolute locations first
+    // Child process: execute fpgautil only from known absolute locations
     static constexpr const char* c_FpgautilCandidates[] = {
         "/opt/redpitaya/bin/fpgautil",
         "/usr/bin/fpgautil",
         "/usr/local/bin/fpgautil",
+        "/usr/sbin/fpgautil",
+        "/sbin/fpgautil",
     };
 
     for (const char* candidate : c_FpgautilCandidates)
@@ -66,8 +68,6 @@ bool loadFpgaBitstream(const std::string& bitstreamPath)
       execl(candidate, candidate, "-b", bitstreamPath.c_str(), nullptr);
     }
 
-    // Fallback for devices where fpgautil is installed elsewhere
-    execlp("fpgautil", "fpgautil", "-b", bitstreamPath.c_str(), nullptr);
     _exit(127);
   }
 
