@@ -53,6 +53,7 @@ struct ServerConfig
     X(SYST_STATUS,          "SYSTEM:STATUS")          /* Get system status */ \
     X(SYST_INIT,            "SYSTEM:INIT")            /* Initialize all hardware */ \
     X(SYST_DEINIT,          "SYSTEM:DEINIT")          /* Deinitialize hardware */ \
+    X(SYST_MODE,            "SYSTEM:MODE")            /* Get operating mode */ \
     X(SYST_SHUTDOWN,        "SYSTEM:SHUTDOWN")        /* Shutdown server */ \
     X(BOARD_MUX_ROUTE,      "BOARD:MUX:ROUTE")        /* Route input to output */ \
     X(BOARD_MUX_DISCONNECT, "BOARD:MUX:DISCONNECT")   /* Disconnect MUX output */ \
@@ -88,6 +89,27 @@ enum class ResponseStatus : uint8_t
   ERR_TIMEOUT,  // Operation timed out
   ERR_UNKNOWN   // Unknown error
 };
+
+/**
+ * @brief Operating mode of the server
+ */
+enum class OperatingMode : uint8_t
+{
+  FULL,   // Red Pitaya with optional electronic board
+  RP_ONLY // Red Pitaya only, electronic board never probed
+};
+
+inline const char* operatingModeToString(OperatingMode mode)
+{
+  switch (mode)
+  {
+  case OperatingMode::RP_ONLY:
+    return "RP_ONLY";
+  case OperatingMode::FULL:
+  default:
+    return "FULL";
+  }
+}
 
 /**
  * @brief Parse a SCPI command keyword into Command enum (case-insensitive).
@@ -349,7 +371,7 @@ inline std::string buildSpectrumResponse(const std::vector<SpectrumPoint>& spect
 struct VersionInfo
 {
   static constexpr int MAJOR = 2;
-  static constexpr int MINOR = 3;
+  static constexpr int MINOR = 4;
   static constexpr int PATCH = 0;
 
   static std::string toString()

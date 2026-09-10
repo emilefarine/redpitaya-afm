@@ -20,12 +20,14 @@ struct SystemStatus
   bool boardConnected;
   bool measurementInProgress;
   uint16_t currentDecimation;
+  OperatingMode mode;
 
   SystemStatus()
       : hardwareInitialized(false)
       , boardConnected(false)
       , measurementInProgress(false)
       , currentDecimation(IRedPitayaHardware::DEFAULT_DECIMATION)
+      , mode(OperatingMode::FULL)
   {
   }
 };
@@ -45,10 +47,12 @@ public:
    * @param hardwareFactory Creates the Red Pitaya hardware on SYSTEM:INIT
    * @param boardFactory Creates the electronic board on SYSTEM:INIT
    * @param measurementTimeoutMs Timeout for blocking measurement waits
+   * @param mode Operating mode; RP_ONLY never creates or probes the board
    */
   explicit CommandHandler(HardwareFactory hardwareFactory = defaultHardwareFactory,
                           BoardFactory boardFactory = defaultBoardFactory,
-                          int measurementTimeoutMs = 5000);
+                          int measurementTimeoutMs = 5000,
+                          OperatingMode mode = OperatingMode::FULL);
   ~CommandHandler();
 
   CommandHandler(const CommandHandler&) = delete;
@@ -81,6 +85,7 @@ private:
   std::string _handleSystStatus(const ParsedCommand& cmd);
   std::string _handleSystInit(const ParsedCommand& cmd);
   std::string _handleSystDeinit(const ParsedCommand& cmd);
+  std::string _handleSystMode(const ParsedCommand& cmd);
 
   // BOARD subsystem
   std::string _handleBoardMuxRoute(const ParsedCommand& cmd);
@@ -97,6 +102,7 @@ private:
 
   std::string _handleUnknown(const ParsedCommand& cmd);
 
+  std::string _boardUnavailableError() const;
   bool _checkInitialized(std::string& errorResponse);
   bool _validateSampleCount(int numSamples, std::string& errorResponse);
   bool _validateDecimation(int decimation, std::string& errorResponse);

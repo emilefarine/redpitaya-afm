@@ -55,7 +55,8 @@ private:
 
 CommandHandler::CommandHandler(HardwareFactory hardwareFactory,
                                BoardFactory boardFactory,
-                               int measurementTimeoutMs)
+                               int measurementTimeoutMs,
+                               OperatingMode mode)
     : m_hardwareFactory(std::move(hardwareFactory))
     , m_boardFactory(std::move(boardFactory))
     , m_measurementTimeoutMs(measurementTimeoutMs)
@@ -65,6 +66,7 @@ CommandHandler::CommandHandler(HardwareFactory hardwareFactory,
     , m_fftProcessor(nullptr)
     , m_resonanceAnalyzer(nullptr)
 {
+  m_status.mode = mode;
 }
 
 CommandHandler::~CommandHandler()
@@ -102,6 +104,8 @@ std::string CommandHandler::handleCommand(const ParsedCommand& cmd)
     return _handleSystInit(cmd);
   case Command::SYST_DEINIT:
     return _handleSystDeinit(cmd);
+  case Command::SYST_MODE:
+    return _handleSystMode(cmd);
 
   // BOARD subsystem
   case Command::BOARD_MUX_ROUTE:
@@ -154,7 +158,9 @@ std::string CommandHandler::_handleRst(const ParsedCommand& cmd)
   m_signalGen.reset();
   m_fftProcessor.reset();
   m_resonanceAnalyzer.reset();
+  OperatingMode mode = m_status.mode;
   m_status = SystemStatus();
+  m_status.mode = mode;
   return buildOkResponse();
 }
 
@@ -180,6 +186,12 @@ std::string CommandHandler::_handleSystVersion(const ParsedCommand& cmd)
   return buildOkResponse("AFM_SERVER " + VersionInfo::toString());
 }
 
+std::string CommandHandler::_handleSystMode(const ParsedCommand& cmd)
+{
+  (void)cmd;
+  return buildOkResponse(operatingModeToString(m_status.mode));
+}
+
 std::string CommandHandler::_handleSystStatus(const ParsedCommand& cmd)
 {
   (void)cmd;
@@ -188,7 +200,8 @@ std::string CommandHandler::_handleSystStatus(const ParsedCommand& cmd)
   oss << "HW_INIT=" << (m_status.hardwareInitialized ? "1" : "0")
       << " BOARD=" << (m_status.boardConnected ? "1" : "0")
       << " BUSY=" << (m_status.measurementInProgress ? "1" : "0")
-      << " DEC=" << m_status.currentDecimation;
+      << " DEC=" << m_status.currentDecimation
+      << " MODE=" << operatingModeToString(m_status.mode);
 
   return buildOkResponse(oss.str());
 }
@@ -210,16 +223,23 @@ std::string CommandHandler::_handleSystInit(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to initialize Red Pitaya");
   }
 
-  // Initialize electronic board
-  m_board = m_boardFactory();
-  if (!m_board || !m_board->initialize())
+  // Initialize electronic board (skipped entirely in RP-only mode)
+  if (m_status.mode == OperatingMode::RP_ONLY)
   {
-    std::cout << "[CommandHandler] Warning: Electronic board not connected" << std::endl;
     m_status.boardConnected = false;
   }
   else
   {
-    m_status.boardConnected = true;
+    m_board = m_boardFactory();
+    if (!m_board || !m_board->initialize())
+    {
+      std::cout << "[CommandHandler] Warning: Electronic board not connected" << std::endl;
+      m_status.boardConnected = false;
+    }
+    else
+    {
+      m_status.boardConnected = true;
+    }
   }
 
   // Initialize signal generator with current decimation
@@ -230,7 +250,14 @@ std::string CommandHandler::_handleSystInit(const ParsedCommand& cmd)
   m_status.hardwareInitialized = true;
 
   std::ostringstream oss;
-  oss << "Red Pitaya OK, Board " << (m_status.boardConnected ? "OK" : "NOT CONNECTED");
+  if (m_status.mode == OperatingMode::RP_ONLY)
+  {
+    oss << "Red Pitaya OK, Board DISABLED (RP-only mode)";
+  }
+  else
+  {
+    oss << "Red Pitaya OK, Board " << (m_status.boardConnected ? "OK" : "NOT CONNECTED");
+  }
   return buildOkResponse(oss.str());
 }
 
@@ -271,7 +298,7 @@ std::string CommandHandler::_handleBoardMuxRoute(const ParsedCommand& cmd)
     return error;
   if (!m_status.boardConnected)
   {
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Board not connected");
+    return _boardUnavailableError();
   }
 
   int output, input;
@@ -305,7 +332,7 @@ std::string CommandHandler::_handleBoardMuxDisconnect(const ParsedCommand& cmd)
     return error;
   if (!m_status.boardConnected)
   {
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Board not connected");
+    return _boardUnavailableError();
   }
 
   int output;
@@ -338,7 +365,7 @@ std::string CommandHandler::_handleBoardGain(const ParsedCommand& cmd)
     return error;
   if (!m_status.boardConnected)
   {
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Board not connected");
+    return _boardUnavailableError();
   }
 
   int channel, gainIndex;
@@ -379,7 +406,7 @@ std::string CommandHandler::_handleBoardReset(const ParsedCommand& cmd)
     return error;
   if (!m_status.boardConnected)
   {
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Board not connected");
+    return _boardUnavailableError();
   }
 
   if (!m_board->reset())
@@ -399,7 +426,7 @@ std::string CommandHandler::_handleBoardStatus(const ParsedCommand& cmd)
     return error;
   if (!m_status.boardConnected)
   {
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Board not connected");
+    return _boardUnavailableError();
   }
 
   std::string boardStatus;
@@ -721,6 +748,16 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
 std::string CommandHandler::_handleUnknown(const ParsedCommand& cmd)
 {
   return buildErrorResponse(ResponseStatus::ERR_SYNTAX, "Unknown command: " + cmd.rawLine);
+}
+
+std::string CommandHandler::_boardUnavailableError() const
+{
+  if (m_status.mode == OperatingMode::RP_ONLY)
+  {
+    return buildErrorResponse(ResponseStatus::ERR_HARDWARE,
+                              "Electronic board disabled (RP-only mode)");
+  }
+  return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Board not connected");
 }
 
 bool CommandHandler::_checkInitialized(std::string& errorResponse)

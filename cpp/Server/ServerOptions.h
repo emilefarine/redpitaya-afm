@@ -13,6 +13,7 @@ struct ServerOptions
 {
   uint16_t port = ServerConfig::DEFAULT_PORT;
   std::string bitstreamPath;
+  bool noBoard = false;
 };
 
 enum class OptionsParseResult
@@ -26,9 +27,9 @@ enum class OptionsParseResult
 /**
  * @brief Parse command line arguments (without the program name).
  *
- * Supported: -p/--port, -b/--bitstream, -h/--help, -v/--version and the
- * legacy bare port number. Returns Help/Version so the caller decides how
- * to report them instead of terminating the process.
+ * Supported: -p/--port, -b/--bitstream, --no-board, -h/--help, -v/--version
+ * and the legacy bare port number. Returns Help/Version so the caller decides
+ * how to report them instead of terminating the process.
  */
 OptionsParseResult parseServerOptions(const std::vector<std::string>& args,
                                       ServerOptions& options,

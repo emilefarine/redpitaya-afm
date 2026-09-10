@@ -130,6 +130,7 @@ void printUsage(const char* programName)
             << AFM::ServerConfig::DEFAULT_PORT << ")\n"
             << "  -b, --bitstream <path>  FPGA bitstream path (default: " << FPGA_BITSTREAM_PATH
             << ")\n"
+            << "      --no-board          Red Pitaya only: never probe the electronic board\n"
             << "  -h, --help              Show this help message\n"
             << "  -v, --version           Show version information\n"
             << "\n"
@@ -190,7 +191,13 @@ int main(int argc, char* argv[])
     std::signal(SIGTERM, signalHandler);
 
     // Create command handler (must be declared before server so it outlives the server thread)
-    auto commandHandler = std::make_unique<AFM::CommandHandler>();
+    AFM::OperatingMode mode =
+        options.noBoard ? AFM::OperatingMode::RP_ONLY : AFM::OperatingMode::FULL;
+    auto commandHandler = std::make_unique<AFM::CommandHandler>(AFM::defaultHardwareFactory,
+                                                                AFM::defaultBoardFactory, 5000,
+                                                                mode);
+
+    std::cout << "[Main] Operating mode: " << AFM::operatingModeToString(mode) << std::endl;
 
     // Create TCP server
     AFM::TCPServer server(options.port);

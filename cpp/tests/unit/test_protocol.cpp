@@ -49,12 +49,22 @@ TEST(ProtocolTest, ParseLineDetectsQuerySuffix)
   EXPECT_EQ(cmd.command, Command::SYST_STATUS);
   EXPECT_TRUE(cmd.isQuery);
 
+  auto mode = parseLine("SYSTEM:MODE?");
+  EXPECT_EQ(mode.command, Command::SYST_MODE);
+  EXPECT_TRUE(mode.isQuery);
+
   auto idn = parseLine("*IDN?");
   EXPECT_EQ(idn.command, Command::IDN);
   EXPECT_TRUE(idn.isQuery);
 
   auto set = parseLine("BOARD:GAIN 1,3");
   EXPECT_FALSE(set.isQuery);
+}
+
+TEST(ProtocolTest, OperatingModeToString)
+{
+  EXPECT_STREQ(operatingModeToString(OperatingMode::FULL), "FULL");
+  EXPECT_STREQ(operatingModeToString(OperatingMode::RP_ONLY), "RP_ONLY");
 }
 
 TEST(ProtocolTest, ParseLineSplitsAndTrimsArguments)
@@ -307,5 +317,5 @@ TEST(ProtocolTest, ServerConfigConstants)
 
 TEST(ProtocolTest, VersionInfoToString)
 {
-  EXPECT_EQ(VersionInfo::toString(), "2.3.0");
+  EXPECT_EQ(VersionInfo::toString(), "2.4.0");
 }
