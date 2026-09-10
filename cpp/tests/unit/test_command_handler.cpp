@@ -298,6 +298,17 @@ TEST_F(CommandHandlerTest, MeasSincValidatesCenterBandwidthAmplitude)
   EXPECT_NE(send("MEASURE:SINC 200,100,8192,64,1.5").find("ERR_PARAM"), std::string::npos);
 }
 
+TEST_F(CommandHandlerTest, MeasSincRejectsEmptyArgumentWithoutShifting)
+{
+  initHardware(true);
+
+  EXPECT_CALL(*m_rawHw, setDecimation(_)).Times(0);
+
+  // Missing bandwidth must not shift 100 into the bandwidth position
+  std::string resp = send("MEASURE:SINC 200,,100");
+  EXPECT_NE(resp.find("ERR_SYNTAX"), std::string::npos);
+}
+
 TEST_F(CommandHandlerTest, MeasSincRejectsSubHertzBandwidth)
 {
   initHardware(true);

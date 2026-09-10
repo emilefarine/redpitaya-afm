@@ -72,6 +72,19 @@ TEST(ProtocolTest, ParseLineSplitsAndTrimsArguments)
   EXPECT_EQ(gain.args[1], "3");
 }
 
+TEST(ProtocolTest, ParseLinePreservesEmptyArgumentPositions)
+{
+  auto cmd = parseLine("MEASURE:SINC 200,,100");
+  ASSERT_EQ(cmd.args.size(), 3u);
+  EXPECT_EQ(cmd.args[0], "200");
+  EXPECT_EQ(cmd.args[1], "");
+  EXPECT_EQ(cmd.args[2], "100");
+
+  auto trailing = parseLine("MEASURE:SINC 200,100,");
+  ASSERT_EQ(trailing.args.size(), 3u);
+  EXPECT_EQ(trailing.args[2], "");
+}
+
 TEST(ProtocolTest, ParseLineUnknownCommands)
 {
   EXPECT_EQ(parseLine("GARBAGE").command, Command::UNKNOWN);
@@ -159,6 +172,15 @@ TEST(ProtocolTest, GetArgFloatRejectsNonFiniteValues)
   float value = -1.0f;
   for (size_t i = 0; i < cmd.args.size(); ++i)
     EXPECT_FALSE(cmd.getArgFloat(i, value)) << "arg " << i << ": " << cmd.args[i];
+}
+
+TEST(ProtocolTest, GetArgFloatRejectsEmptyString)
+{
+  ParsedCommand cmd;
+  cmd.args = {""};
+
+  float value = -1.0f;
+  EXPECT_FALSE(cmd.getArgFloat(0, value));
 }
 
 TEST(ProtocolTest, GetArgFloatAcceptsCommonFormats)
