@@ -152,6 +152,40 @@ $(HOST_UNITTEST): $(HOST_OBJS) $(UNITTEST_SRCS) | $(HOST_BUILD_DIR)
 test_host: $(HOST_UNITTEST)
 	$(HOST_UNITTEST)
 
+# Sanitizer-enabled host tests (Linux/macOS; ASan is unreliable under MSYS2)
+HOST_SAN_BUILD_DIR = out/host-san
+HOST_SAN_OBJ_DIR   = $(HOST_SAN_BUILD_DIR)/obj
+HOST_SAN_UNITTEST  = $(HOST_SAN_BUILD_DIR)/unit_tests_san.exe
+
+HOST_SAN_FLAGS  = -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined
+HOST_SAN_CXXFLAGS = $(filter-out --coverage,$(HOST_CXXFLAGS)) $(HOST_SAN_FLAGS)
+
+HOST_SAN_OBJS = $(patsubst $(SIGNAL_DIR)/%.cpp,$(HOST_SAN_OBJ_DIR)/%.o,$(filter $(SIGNAL_DIR)/%,$(HOST_SRCS))) \
+                $(patsubst $(HARDWARE_DIR)/%.cpp,$(HOST_SAN_OBJ_DIR)/%.o,$(filter $(HARDWARE_DIR)/%,$(HOST_SRCS))) \
+                $(patsubst $(SERVER_DIR)/%.cpp,$(HOST_SAN_OBJ_DIR)/%.o,$(filter $(SERVER_DIR)/%,$(HOST_SRCS)))
+
+$(HOST_SAN_BUILD_DIR):
+	mkdir -p $(HOST_SAN_BUILD_DIR)
+
+$(HOST_SAN_OBJ_DIR):
+	mkdir -p $(HOST_SAN_OBJ_DIR)
+
+$(HOST_SAN_OBJ_DIR)/%.o: $(SIGNAL_DIR)/%.cpp | $(HOST_SAN_OBJ_DIR)
+	$(HOST_CXX) -c $< $(HOST_SAN_CXXFLAGS) -o $@
+
+$(HOST_SAN_OBJ_DIR)/%.o: $(HARDWARE_DIR)/%.cpp | $(HOST_SAN_OBJ_DIR)
+	$(HOST_CXX) -c $< $(HOST_SAN_CXXFLAGS) -o $@
+
+$(HOST_SAN_OBJ_DIR)/%.o: $(SERVER_DIR)/%.cpp | $(HOST_SAN_OBJ_DIR)
+	$(HOST_CXX) -c $< $(HOST_SAN_CXXFLAGS) -o $@
+
+$(HOST_SAN_UNITTEST): $(HOST_SAN_OBJS) $(UNITTEST_SRCS) | $(HOST_SAN_BUILD_DIR)
+	$(HOST_CXX) $(UNITTEST_SRCS) $(HOST_SAN_OBJS) $(HOST_SAN_CXXFLAGS) $(HOST_LDLIBS) -o $@
+
+# Build and run host unit tests under AddressSanitizer and UBSan
+test_host_san: $(HOST_SAN_UNITTEST)
+	$(HOST_SAN_UNITTEST)
+
 # Run host unit tests and generate HTML coverage report
 coverage: $(HOST_UNITTEST)
 	$(RM) $(HOST_OBJ_DIR)/*.gcda $(HOST_BUILD_DIR)/*.gcda
@@ -163,6 +197,10 @@ coverage: $(HOST_UNITTEST)
 # Remove host test build artifacts (objects, coverage data, reports)
 clean_host:
 	rm -rf $(HOST_BUILD_DIR)
+
+# Remove sanitizer test build artifacts
+clean_host_san:
+	rm -rf $(HOST_SAN_BUILD_DIR)
 
 
 # Clean object files
@@ -189,11 +227,13 @@ help:
 	@echo "  server                    - Build AFM server"
 	@echo "  tools                     - Build tool programs (oled_ip)"
 	@echo "  test_host                 - Run host unit tests (no RedPitaya needed)"
+	@echo "  test_host_san             - Host unit tests under ASan/UBSan (Linux/macOS)"
 	@echo "  coverage                  - Host unit tests + HTML coverage report"
 	@echo "                              (out/host/coverage/index.html)"
 	@echo "  clean                     - Remove object files"
 	@echo "  clean_all                 - Remove all generated files"
 	@echo "  clean_host                - Remove host test build artifacts"
+	@echo "  clean_host_san            - Remove sanitizer test build artifacts"
 	@echo "  help                      - Show this help message"
 	@echo ""
 	@echo "Main programs:"
@@ -212,4 +252,4 @@ help:
 	@echo "  • Resonance detection (frequency, Q-factor, amplitude)"
 	@echo "  • CSV export for visualization"
 
-.PHONY: all server tools test_host coverage clean_host clean clean_all help
+.PHONY: all server tools test_host test_host_san coverage clean_host clean_host_san clean clean_all help
