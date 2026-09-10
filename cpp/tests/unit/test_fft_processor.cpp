@@ -140,6 +140,19 @@ TEST(FftProcessorTest, ApplyWindowEndpointValues)
   EXPECT_NEAR(blackman[N / 2], 1.0f, 1e-3f);
 }
 
+TEST(FftProcessorTest, ApplyWindowSingleSampleIsNoOp)
+{
+  FFTProcessor fft(c_Fs);
+
+  for (WindowType type : {WindowType::Hann, WindowType::Hamming, WindowType::Blackman})
+  {
+    std::vector<float> single = {0.5f};
+    fft.applyWindow(single, type);
+    EXPECT_TRUE(std::isfinite(single[0]));
+    EXPECT_FLOAT_EQ(single[0], 0.5f);
+  }
+}
+
 TEST(FftProcessorTest, HannWindowReducesSpectralLeakage)
 {
   const uint32_t N = 2048;

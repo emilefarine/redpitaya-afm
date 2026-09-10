@@ -101,6 +101,10 @@ std::vector<float> SignalGenerator::generateSineWave(uint32_t numSamples,
 void SignalGenerator::_applyHannWindow(std::vector<float>& signal) const
 {
   const size_t N = signal.size();
+  if (N < 2)
+  {
+    return;
+  }
 
   for (size_t i = 0; i < N; ++i)
   {

@@ -106,6 +106,10 @@ std::vector<float> FFTProcessor::getFrequencyAxis(uint32_t numSamples) const
 void FFTProcessor::applyWindow(std::vector<float>& signal, WindowType windowType) const
 {
   const size_t N = signal.size();
+  if (N < 2)
+  {
+    return;
+  }
 
   switch (windowType)
   {
