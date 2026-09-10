@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <sstream>
@@ -27,6 +28,12 @@ struct ServerConfig
   // FPGA constraint: decimation must be power-of-two in [16, 1024]
   static constexpr uint16_t MIN_DECIMATION = 16;
   static constexpr uint16_t MAX_DECIMATION = 1024;
+
+  // ADC sample rate of the Red Pitaya STEMlab 125-14
+  static constexpr double ADC_SAMPLE_RATE_HZ = 125000000.0;
+
+  // Upper bound on the number of points in a MEASURE:SWEEP
+  static constexpr size_t MAX_SWEEP_POINTS = 4096;
 };
 
 // clang-format off
@@ -185,7 +192,7 @@ struct ParsedCommand
     const std::string& s = args[index];
     char* end = nullptr;
     value = std::strtof(s.c_str(), &end);
-    return end == s.c_str() + s.size();
+    return end == s.c_str() + s.size() && std::isfinite(value);
   }
 
   /**
@@ -335,7 +342,7 @@ inline std::string buildSpectrumResponse(const std::vector<SpectrumPoint>& spect
 struct VersionInfo
 {
   static constexpr int MAJOR = 2;
-  static constexpr int MINOR = 2;
+  static constexpr int MINOR = 3;
   static constexpr int PATCH = 0;
 
   static std::string toString()

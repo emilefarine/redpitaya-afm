@@ -101,6 +101,14 @@ TEST_F(SignalGeneratorTest, SincIsHannWindowed)
   EXPECT_GT(energy, 0.0);
 }
 
+TEST_F(SignalGeneratorTest, SincSingleSampleIsFinite)
+{
+  auto sig = gen.generateSincSignal(1, 200000, 100000, 1.0f);
+  ASSERT_EQ(sig.size(), 1u);
+  EXPECT_TRUE(std::isfinite(sig[0]));
+  EXPECT_FLOAT_EQ(sig[0], 1.0f);
+}
+
 TEST_F(SignalGeneratorTest, SincEnergyConcentratedInBand)
 {
   const uint32_t N = 8192;

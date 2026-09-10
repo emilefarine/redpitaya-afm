@@ -119,6 +119,8 @@ private:
    */
   bool _configurePort();
 
+  static constexpr size_t MAX_RECV_BUFFER = 4096;
+
   std::string m_devicePath;
   uint32_t m_baudRate;
   int m_fd; // File descriptor for UART

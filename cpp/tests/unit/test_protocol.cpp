@@ -129,6 +129,16 @@ TEST(ProtocolTest, GetArgFloatRejectsInvalidValues)
   EXPECT_FALSE(cmd.getArgFloat(10, value)); // out of range index
 }
 
+TEST(ProtocolTest, GetArgFloatRejectsNonFiniteValues)
+{
+  ParsedCommand cmd;
+  cmd.args = {"nan", "NaN", "inf", "-inf", "infinity", "1e9999", "-1e9999"};
+
+  float value = -1.0f;
+  for (size_t i = 0; i < cmd.args.size(); ++i)
+    EXPECT_FALSE(cmd.getArgFloat(i, value)) << "arg " << i << ": " << cmd.args[i];
+}
+
 TEST(ProtocolTest, GetArgStringReturnsArgumentOrFails)
 {
   ParsedCommand cmd;
@@ -209,5 +219,5 @@ TEST(ProtocolTest, ServerConfigConstants)
 
 TEST(ProtocolTest, VersionInfoToString)
 {
-  EXPECT_EQ(VersionInfo::toString(), "2.2.0");
+  EXPECT_EQ(VersionInfo::toString(), "2.3.0");
 }

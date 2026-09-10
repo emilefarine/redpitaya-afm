@@ -43,8 +43,8 @@ bool loadFpgaBitstream(const std::string& bitstreamPath)
   std::cout << "[FPGA] Executing: fpgautil -b " << bitstreamPath << std::endl;
 
   // Use fork/exec instead of std::system() to avoid shell injection vulnerabilities.
-  // With execvp, arguments are passed directly to the process without shell interpretation,
-  // so shell metacharacters in bitstreamPath have no effect.
+  // With the exec family, arguments are passed directly to the process without shell
+  // interpretation, so shell metacharacters in bitstreamPath have no effect.
   pid_t pid = fork();
   if (pid < 0)
   {
@@ -54,9 +54,20 @@ bool loadFpgaBitstream(const std::string& bitstreamPath)
 
   if (pid == 0)
   {
-    // Child process: execute fpgautil directly
-    execlp("fpgautil", "fpgautil", "-b", bitstreamPath.c_str(), nullptr);
-    // If execlp returns, it failed
+    // Child process: execute fpgautil only from known absolute locations
+    static constexpr const char* c_FpgautilCandidates[] = {
+        "/opt/redpitaya/bin/fpgautil",
+        "/usr/bin/fpgautil",
+        "/usr/local/bin/fpgautil",
+        "/usr/sbin/fpgautil",
+        "/sbin/fpgautil",
+    };
+
+    for (const char* candidate : c_FpgautilCandidates)
+    {
+      execl(candidate, candidate, "-b", bitstreamPath.c_str(), nullptr);
+    }
+
     _exit(127);
   }
 

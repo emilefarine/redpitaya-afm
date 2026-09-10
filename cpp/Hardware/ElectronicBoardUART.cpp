@@ -384,5 +384,13 @@ bool ElectronicBoardUART::_readLine(std::string& line, uint32_t timeoutMs)
 
     // Append to persistent buffer
     m_recvBuffer.append(buffer, static_cast<size_t>(bytesRead));
+
+    if (m_recvBuffer.size() > MAX_RECV_BUFFER &&
+        m_recvBuffer.find('\n') == std::string::npos)
+    {
+      m_recvBuffer.clear();
+      m_lastError = "Receive buffer overflow (no line terminator)";
+      return false;
+    }
   }
 }
