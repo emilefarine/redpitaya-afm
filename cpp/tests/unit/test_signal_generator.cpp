@@ -78,6 +78,16 @@ TEST_F(SignalGeneratorTest, SineWaveRejectsInvalidParameters)
   EXPECT_THROW(gen.generateSineWave(1000, 100.0, 1.1f), std::invalid_argument);
 }
 
+TEST_F(SignalGeneratorTest, SineNegativeFrequencyThrows)
+{
+  EXPECT_THROW(gen.generateSineWave(1024, -100.0), std::invalid_argument);
+}
+
+TEST_F(SignalGeneratorTest, SincZeroBandwidthThrows)
+{
+  EXPECT_THROW(gen.generateSincSignal(1024, 200000, 0), std::invalid_argument);
+}
+
 TEST_F(SignalGeneratorTest, SineZeroFrequencyIsZero)
 {
   auto sig = gen.generateSineWave(64, 0.0, 1.0f);

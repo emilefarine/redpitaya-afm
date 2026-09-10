@@ -298,6 +298,18 @@ TEST_F(CommandHandlerTest, MeasSincValidatesCenterBandwidthAmplitude)
   EXPECT_NE(send("MEASURE:SINC 200,100,8192,64,1.5").find("ERR_PARAM"), std::string::npos);
 }
 
+TEST_F(CommandHandlerTest, MeasSincRejectsSubHertzBandwidth)
+{
+  initHardware(true);
+
+  EXPECT_CALL(*m_rawHw, setDecimation(_)).Times(0);
+
+  // 0.0001 kHz = 0.1 Hz would truncate to 0 in the generator API
+  std::string resp = send("MEASURE:SINC 200,0.0001");
+  EXPECT_NE(resp.find("ERR_PARAM"), std::string::npos);
+  EXPECT_EQ(resp.find("Internal error"), std::string::npos);
+}
+
 TEST_F(CommandHandlerTest, MeasSincSampleCountBoundaries)
 {
   initHardware(true);
