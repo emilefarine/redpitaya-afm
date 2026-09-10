@@ -118,6 +118,38 @@ TEST_F(ResonanceAnalyzerTest, CalculateQFactorMatchesPeakOverBandwidth)
   EXPECT_NEAR(q, c_F0 / c_Bw3dB, 0.3f);
 }
 
+TEST_F(ResonanceAnalyzerTest, ZeroPeakGivesZeroQFactor)
+{
+  std::vector<float> mag(65, 0.0f);
+
+  EXPECT_FLOAT_EQ(analyzer.calculateQFactor(mag, 32), 0.0f);
+}
+
+TEST_F(ResonanceAnalyzerTest, PeakAtSpectrumEdgesIsFinite)
+{
+  std::vector<float> magFirst(65, 0.0f);
+  magFirst[0] = 1.0f;
+
+  std::vector<float> magLast(65, 0.0f);
+  magLast.back() = 1.0f;
+
+  EXPECT_TRUE(std::isfinite(analyzer.calculateQFactor(magFirst, 0)));
+  EXPECT_TRUE(std::isfinite(analyzer.calculateQFactor(magLast, magLast.size() - 1)));
+}
+
+TEST_F(ResonanceAnalyzerTest, SingleBinSpectrumIsFinite)
+{
+  std::vector<float> mag = {1.0f};
+  std::vector<float> phase = {0.0f};
+
+  auto res = analyzer.analyzeResonance(mag, phase, 0.0f, 100.0f);
+
+  EXPECT_TRUE(std::isfinite(res.peakFrequency));
+  EXPECT_FLOAT_EQ(res.peakFrequency, 0.0f);
+  EXPECT_FLOAT_EQ(res.bandwidth3dB, 0.0f);
+  EXPECT_FLOAT_EQ(res.qFactor, 0.0f);
+}
+
 TEST_F(ResonanceAnalyzerTest, AnalyzeResonanceRejectsInvalidSpectra)
 {
   std::vector<float> mag(64, 1.0f);
