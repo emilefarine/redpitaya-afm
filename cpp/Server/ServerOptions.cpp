@@ -1,9 +1,22 @@
 #include "ServerOptions.h"
 
-#include <cstdlib>
+#include <charconv>
 
 namespace AFM
 {
+
+namespace
+{
+bool parsePortNumber(const std::string& text, int& value)
+{
+  if (text.empty())
+  {
+    return false;
+  }
+  auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+  return ec == std::errc{} && ptr == text.data() + text.size();
+}
+} // namespace
 
 OptionsParseResult parseServerOptions(const std::vector<std::string>& args,
                                       ServerOptions& options,
@@ -29,8 +42,8 @@ OptionsParseResult parseServerOptions(const std::vector<std::string>& args,
         return OptionsParseResult::Error;
       }
       const std::string& value = args[++i];
-      int portVal = std::atoi(value.c_str());
-      if (portVal <= 0 || portVal > 65535)
+      int portVal = 0;
+      if (!parsePortNumber(value, portVal) || portVal <= 0 || portVal > 65535)
       {
         errorMessage = "Invalid port number: " + value;
         return OptionsParseResult::Error;
@@ -50,8 +63,8 @@ OptionsParseResult parseServerOptions(const std::vector<std::string>& args,
     }
 
     // Legacy format: bare port number
-    int portVal = std::atoi(arg.c_str());
-    if (portVal > 0 && portVal <= 65535)
+    int portVal = 0;
+    if (parsePortNumber(arg, portVal) && portVal > 0 && portVal <= 65535)
     {
       options.port = static_cast<uint16_t>(portVal);
       continue;

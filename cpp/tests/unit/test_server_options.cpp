@@ -64,6 +64,25 @@ TEST(ServerOptionsTest, RejectsInvalidPorts)
   }
 }
 
+TEST(ServerOptionsTest, RejectsPartialPortNumbers)
+{
+  const std::vector<std::vector<std::string>> cases = {
+      {"-p", "60x0"}, {"-p", "12.5"}, {"-p", "+6000"}, {"123abc"}};
+
+  for (const auto& args : cases)
+  {
+    ServerOptions options;
+    std::string error;
+    EXPECT_EQ(parseServerOptions(args, options, error), OptionsParseResult::Error) << error;
+  }
+}
+
+TEST(ServerOptionsTest, AcceptsPortBoundaries)
+{
+  EXPECT_EQ(parseOk({"-p", "1"}).port, 1);
+  EXPECT_EQ(parseOk({"-p", "65535"}).port, 65535);
+}
+
 TEST(ServerOptionsTest, RejectsMissingValues)
 {
   ServerOptions options;
