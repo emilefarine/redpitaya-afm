@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace
@@ -35,6 +36,17 @@ TEST(DacCodecTest, OutOfRangeVoltagesAreClamped)
 {
   EXPECT_EQ(DacCodec::voltageToDAC(5.0f), 8191);
   EXPECT_EQ(DacCodec::voltageToDAC(-5.0f), -8191);
+}
+
+TEST(DacCodecTest, NaNVoltageGivesZeroCode)
+{
+  EXPECT_EQ(DacCodec::voltageToDAC(std::nanf("")), 0);
+}
+
+TEST(DacCodecTest, InfiniteVoltagesClampToFullScale)
+{
+  EXPECT_EQ(DacCodec::voltageToDAC(std::numeric_limits<float>::infinity()), 8191);
+  EXPECT_EQ(DacCodec::voltageToDAC(-std::numeric_limits<float>::infinity()), -8191);
 }
 
 TEST(DacCodecTest, HalfScaleVoltage)

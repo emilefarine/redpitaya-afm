@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 
 /**
@@ -21,6 +22,11 @@ static constexpr int32_t MIN_DAC_VALUE = -8192; // 14-bit signed min
  */
 inline int16_t voltageToDAC(float voltage)
 {
+  if (std::isnan(voltage))
+  {
+    return 0;
+  }
+
   // Clamp voltage to ±1V
   if (voltage > 1.0f)
   {
