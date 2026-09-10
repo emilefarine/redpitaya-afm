@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <iostream>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -235,6 +236,17 @@ void TCPServer::_acceptClient()
   tv.tv_usec = 0;
   setsockopt(m_clientFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
   setsockopt(m_clientFd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+  // Detect dead peers: ~2 min (60s idle + 6 probes * 10s) instead of holding
+  // the single client slot until the 1 hour idle timeout
+  int keepAlive = 1;
+  int keepIdle = 60;
+  int keepInterval = 10;
+  int keepCount = 6;
+  setsockopt(m_clientFd, SOL_SOCKET, SO_KEEPALIVE, &keepAlive, sizeof(keepAlive));
+  setsockopt(m_clientFd, IPPROTO_TCP, TCP_KEEPIDLE, &keepIdle, sizeof(keepIdle));
+  setsockopt(m_clientFd, IPPROTO_TCP, TCP_KEEPINTVL, &keepInterval, sizeof(keepInterval));
+  setsockopt(m_clientFd, IPPROTO_TCP, TCP_KEEPCNT, &keepCount, sizeof(keepCount));
 
   char clientIP[INET_ADDRSTRLEN];
   inet_ntop(AF_INET, &clientAddr.sin_addr, clientIP, sizeof(clientIP));
