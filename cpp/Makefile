@@ -65,6 +65,19 @@ HOST_SRCS  = $(SIGNAL_DIR)/SignalGenerator.cpp \
              $(SERVER_DIR)/CommandHandler.cpp \
              $(SERVER_DIR)/ServerOptions.cpp
 
+# POSIX-only sources that are compiled on-device but excluded from the host
+# test build. check_posix type-checks them on Linux (the Windows/MSYS2 toolchain
+# has no sys/mman.h, poll.h, termios.h, ...) so CI catches compile errors.
+POSIX_SRCS = $(HARDWARE_DIR)/RedPitayaHardware.cpp \
+             $(HARDWARE_DIR)/ElectronicBoardUART.cpp \
+             $(HARDWARE_DIR)/SSD1306.cpp \
+             $(SERVER_DIR)/TCPServer.cpp \
+             $(SERVER_DIR)/HardwareFactories.cpp \
+             $(SERVER_DIR)/ServerMain.cpp \
+             $(TOOLS_DIR)/oled_ip.cpp
+
+POSIX_CXXFLAGS = -std=c++17 -Wall -Wextra -ICommon -I$(SIGNAL_DIR) -I$(HARDWARE_DIR) -IServer
+
 HOST_OBJS      = $(patsubst $(SIGNAL_DIR)/%.cpp,$(HOST_OBJ_DIR)/%.o,$(filter $(SIGNAL_DIR)/%,$(HOST_SRCS))) \
                  $(patsubst $(HARDWARE_DIR)/%.cpp,$(HOST_OBJ_DIR)/%.o,$(filter $(HARDWARE_DIR)/%,$(HOST_SRCS))) \
                  $(patsubst $(SERVER_DIR)/%.cpp,$(HOST_OBJ_DIR)/%.o,$(filter $(SERVER_DIR)/%,$(HOST_SRCS)))
@@ -186,6 +199,11 @@ $(HOST_SAN_UNITTEST): $(HOST_SAN_OBJS) $(UNITTEST_SRCS) | $(HOST_SAN_BUILD_DIR)
 test_host_san: $(HOST_SAN_UNITTEST)
 	$(HOST_SAN_UNITTEST)
 
+# Type-check the POSIX-only sources excluded from the host test build.
+# Linux-only: the MSYS2/mingw toolchain lacks the required POSIX headers.
+check_posix:
+	$(HOST_CXX) $(POSIX_CXXFLAGS) -fsyntax-only $(POSIX_SRCS)
+
 # Run host unit tests and generate HTML coverage report
 coverage: $(HOST_UNITTEST)
 	$(RM) $(HOST_OBJ_DIR)/*.gcda $(HOST_BUILD_DIR)/*.gcda
@@ -228,6 +246,7 @@ help:
 	@echo "  tools                     - Build tool programs (oled_ip)"
 	@echo "  test_host                 - Run host unit tests (no RedPitaya needed)"
 	@echo "  test_host_san             - Host unit tests under ASan/UBSan (Linux/macOS)"
+	@echo "  check_posix               - Type-check POSIX-only sources (Linux only)"
 	@echo "  coverage                  - Host unit tests + HTML coverage report"
 	@echo "                              (out/host/coverage/index.html)"
 	@echo "  clean                     - Remove object files"
@@ -252,4 +271,4 @@ help:
 	@echo "  • Resonance detection (frequency, Q-factor, amplitude)"
 	@echo "  • CSV export for visualization"
 
-.PHONY: all server tools test_host test_host_san coverage clean_host clean_host_san clean clean_all help
+.PHONY: all server tools test_host test_host_san check_posix coverage clean_host clean_host_san clean clean_all help
