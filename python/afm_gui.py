@@ -778,6 +778,15 @@ class AFMMainWindow(QMainWindow):
                 val_lbl.setText(icon)
                 val_lbl.setStyleSheet(f"color: {color}; font-weight: bold;")
             self._update_board_controls(status)
+
+            warnings = []
+            if status.adc_overdrive:
+                warnings.append("ADC overdrive risk: lower the return channel PGA gain "
+                                "or the excitation amplitude")
+            if status.adc_saturated:
+                warnings.append("ADC input saturated: the last acquisition was clipped")
+            if warnings:
+                self.statusBar().showMessage(" | ".join(warnings))
         except AFMBusyError:
             self.statusBar().showMessage("Status refresh skipped: client busy")
         except AFMError as exc:

@@ -113,6 +113,9 @@ class AFMShell(cmd.Cmd):
             print(f"  Operating Mode:       {status.mode.value}")
             print(f"  Measurement Active:   {status.measurement_in_progress}")
             print(f"  Decimation:           {status.decimation}")
+            print(f"  ADC Loop (exc,ret):   {status.adc_loop or 'OFF'}")
+            print(f"  ADC Overdrive Warn:   {status.adc_overdrive}")
+            print(f"  ADC Saturated:        {status.adc_saturated}")
         except AFMError as e:
             print(f"Error: {e}")
 
@@ -235,6 +238,33 @@ class AFMShell(cmd.Cmd):
         try:
             result = self.client.get_board_status()
             print(result)
+        except AFMError as e:
+            print(f"Error: {e}")
+
+    def do_adc_loop(self, arg):
+        """Configure ADC input protection: adc_loop <excite_ch> <return_ch> or adc_loop off"""
+        hint = self._board_unavailable_hint()
+        if hint:
+            print(hint)
+            return
+        args = arg.split()
+        try:
+            if args and args[0].lower() == 'off':
+                result = self.client.disable_adc_loop()
+                print(f"OK: {result}")
+            elif len(args) == 2:
+                excite, ret = int(args[0]), int(args[1])
+                result = self.client.configure_adc_loop(excite, ret)
+                print(f"OK: ADC loop {excite},{ret} -> {result}")
+                if 'WARN' in result:
+                    print("  The boosted signal would saturate the +/-1 V ADC input.")
+                    print("  Lower the return channel gain (PGA) or the excitation amplitude.")
+            else:
+                print("Usage: adc_loop <excite_ch> <return_ch>  or  adc_loop off  (channels 1-4)")
+                print("  excite_ch: board input fed by the Red Pitaya output")
+                print("  return_ch: board input returning into the Red Pitaya ADC")
+        except ValueError:
+            print("Error: Arguments must be integers")
         except AFMError as e:
             print(f"Error: {e}")
 
@@ -415,6 +445,9 @@ Electronic Board:
   mux disconnect <out>    Disconnect output (BOARD:MUX:DISCONNECT)
   gain <ch> <idx>         Set gain (BOARD:GAIN)
                           ch: 1-4, idx: 0=1/8, 1=1/4, 2=1/2, 3=1, 4=2, 5=4, 6=8, 7=16
+  adc_loop <exc> <ret>    Configure ADC input protection (BOARD:ADC:LOOP)
+                          adc_loop off disables it; the server warns on 'gain'
+                          commands that would saturate the +/-1 V ADC input
   board_reset             Reset board (BOARD:RESET)
   board_status            Show board status (BOARD:STATUS?)
 
