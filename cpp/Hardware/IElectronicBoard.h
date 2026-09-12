@@ -102,4 +102,35 @@ public:
       return "?";
     }
   }
+
+  /**
+   * @brief Get the numeric gain factor of a setting (x1/8 .. x16)
+   * @param gain Gain setting
+   * @return Voltage gain factor (0.125 .. 16)
+   */
+  static float gainFactor(GainSetting gain)
+  {
+    switch (gain)
+    {
+    case GainSetting::GAIN_1_8:
+      return 0.125f;
+    case GainSetting::GAIN_1_4:
+      return 0.25f;
+    case GainSetting::GAIN_1_2:
+      return 0.5f;
+    case GainSetting::GAIN_1:
+      return 1.0f;
+    case GainSetting::GAIN_2:
+      return 2.0f;
+    case GainSetting::GAIN_4:
+      return 4.0f;
+    case GainSetting::GAIN_8:
+      return 8.0f;
+    case GainSetting::GAIN_16:
+      return 16.0f;
+
+    default:
+      return 1.0f;
+    }
+  }
 };
