@@ -43,6 +43,17 @@ struct ServerConfig
  * X(enum_name, scpi_keyword), maps an enum value to its SCPI wire-format
  * keyword.  The parser strips a trailing '?' (marking a query) before
  * matching; the isQuery flag in ParsedCommand distinguishes set from query.
+ *
+ * ADC input protection (BOARD:ADC:LOOP):
+ *   The board boosts the Red Pitaya output before it reaches the AFM and the
+ *   response returns through a board input channel into the +/-1 V ADC range.
+ *   BOARD:ADC:LOOP <excite_ch>,<return_ch> tells the server which channels
+ *   form that loop. It then tracks the last excitation amplitude and the
+ *   gains of both channels, warns on BOARD:GAIN when the predicted peak
+ *   would saturate the ADC ("OK <gain> WARN: ...", commands are never
+ *   rejected), and reports state via SYSTEM:STATUS fields LOOP, OVERDRIVE
+ *   and SAT. MEASURE replies keep their "OK DATA <N> <BYTES>" format, so
+ *   overdrive/saturation results are only visible in SYSTEM:STATUS.
  */
 #define AFM_COMMAND_LIST \
     X(IDN,                  "*IDN")                   /* IEEE 488.2: Identify */ \
@@ -58,6 +69,7 @@ struct ServerConfig
     X(BOARD_MUX_ROUTE,      "BOARD:MUX:ROUTE")        /* Route input to output */ \
     X(BOARD_MUX_DISCONNECT, "BOARD:MUX:DISCONNECT")   /* Disconnect MUX output */ \
     X(BOARD_GAIN,           "BOARD:GAIN")             /* Set channel gain */ \
+    X(BOARD_ADC_LOOP,       "BOARD:ADC:LOOP")         /* Configure ADC return-path overdrive monitor */ \
     X(BOARD_RESET,          "BOARD:RESET")            /* Reset electronic board */ \
     X(BOARD_STATUS,         "BOARD:STATUS")           /* Get electronic board status */ \
     X(MEAS_SINC,            "MEASURE:SINC")           /* Broadband sinc measurement + FFT */ \
@@ -371,7 +383,7 @@ inline std::string buildSpectrumResponse(const std::vector<SpectrumPoint>& spect
 struct VersionInfo
 {
   static constexpr int MAJOR = 2;
-  static constexpr int MINOR = 4;
+  static constexpr int MINOR = 5;
   static constexpr int PATCH = 0;
 
   static std::string toString()
