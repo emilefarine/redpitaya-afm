@@ -787,6 +787,8 @@ class AFMMainWindow(QMainWindow):
                 warnings.append("ADC input saturated: the last acquisition was clipped")
             if warnings:
                 self.statusBar().showMessage(" | ".join(warnings))
+            else:
+                self.statusBar().clearMessage()
         except AFMBusyError:
             self.statusBar().showMessage("Status refresh skipped: client busy")
         except AFMError as exc:
@@ -820,7 +822,13 @@ class AFMMainWindow(QMainWindow):
             ch = self.gain_ch.currentIndex() + 1  # Convert to 1-based (board connector label)
             idx = self.gain_val.currentData()
             result = self.client.set_gain(ch, idx)
-            self.statusBar().showMessage(f"Gain: Channel {ch} set to x{result}")
+            if " WARN:" in result:
+                # Server appends a warning when the gain risks ADC saturation
+                gain_part, warn_part = result.split(" WARN:", 1)
+                self.statusBar().showMessage(
+                    f"Gain: Channel {ch} set to x{gain_part}; {warn_part.strip()}")
+            else:
+                self.statusBar().showMessage(f"Gain: Channel {ch} set to x{result}")
         except AFMError as exc:
             self._sync_connection_ui()
             self.statusBar().showMessage(f"Gain error: {exc}")

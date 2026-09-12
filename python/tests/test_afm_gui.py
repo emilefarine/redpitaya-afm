@@ -125,6 +125,43 @@ class GuiSmokeTests(unittest.TestCase):
             self.assertEqual(self.window.connect_btn.text(), "Connect")
             self.assertFalse(self.window.measure_btn.isEnabled())
 
+    def test_gain_warn_is_shown_separately(self):
+        def respond(command, handler):
+            if command == "BOARD:GAIN 1,7":
+                return "OK 16 WARN: expected ADC peak ~10.50 V exceeds 1 V full scale\n"
+            return "OK\n"
+
+        server = self.make_server(respond)
+        client = AFMClient("127.0.0.1", server.port, timeout=2.0)
+        client.connect()
+        self.addCleanup(client.disconnect)
+        self.window.client = client
+        self.window._update_connection_ui(True)
+
+        self.window.gain_ch.setCurrentIndex(0)
+        self.window.gain_val.setCurrentIndex(7)
+        self.window._on_gain_set()
+
+        message = self.window.statusBar().currentMessage()
+        self.assertIn("Channel 1 set to x16", message)
+        self.assertIn("expected ADC peak", message)
+        self.assertNotIn("WARN:", message)
+
+    def test_refresh_clears_stale_warnings(self):
+        def respond(command, handler):
+            return "OK HW_INIT=0 BOARD=0 BUSY=0 DEC=64\n"
+
+        server = self.make_server(respond)
+        client = AFMClient("127.0.0.1", server.port, timeout=2.0)
+        client.connect()
+        self.addCleanup(client.disconnect)
+        self.window.client = client
+        self.window._update_connection_ui(True)
+
+        self.window.statusBar().showMessage("old warning")
+        self.window._on_refresh_status()
+        self.assertEqual(self.window.statusBar().currentMessage(), "")
+
     def test_status_timeout_goes_offline(self):
         started = threading.Event()
         release = threading.Event()
