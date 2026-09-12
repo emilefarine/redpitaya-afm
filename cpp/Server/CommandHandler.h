@@ -1,9 +1,11 @@
 #pragma once
 
 #include "../Hardware/IElectronicBoard.h"
+#include "../Hardware/InputSafety.h"
 #include "../Hardware/IRedPitayaHardware.h"
 #include "../SignalProcessing/FFTProcessor.h"
 #include "../SignalProcessing/ResonanceAnalyzer.h"
+#include "../SignalProcessing/SaturationDetector.h"
 #include "../SignalProcessing/SignalGenerator.h"
 #include "HardwareFactories.h"
 #include "Protocol.h"
@@ -22,12 +24,26 @@ struct SystemStatus
   uint16_t currentDecimation;
   OperatingMode mode;
 
+  // ADC input protection state (see BOARD:ADC:LOOP in Protocol.h)
+  bool loopMonitorEnabled;      ///< Loop configured, interlock warnings active
+  uint8_t loopExciteChannel;    ///< Board input driven by the RP DAC (0-based)
+  uint8_t loopReturnChannel;    ///< Board input returning into the ADC (0-based)
+  bool adcOverdrive;            ///< Worst case estimate exceeds ADC full scale
+  bool adcSaturated;            ///< Saturation detected in the last acquisition
+  float adcSaturationRatio;     ///< Fraction of saturated samples (last acquisition)
+
   SystemStatus()
       : hardwareInitialized(false)
       , boardConnected(false)
       , measurementInProgress(false)
       , currentDecimation(IRedPitayaHardware::DEFAULT_DECIMATION)
       , mode(OperatingMode::FULL)
+      , loopMonitorEnabled(false)
+      , loopExciteChannel(0)
+      , loopReturnChannel(0)
+      , adcOverdrive(false)
+      , adcSaturated(false)
+      , adcSaturationRatio(0.0f)
   {
   }
 };
@@ -94,6 +110,7 @@ private:
   std::string _handleBoardMuxRoute(const ParsedCommand& cmd);
   std::string _handleBoardMuxDisconnect(const ParsedCommand& cmd);
   std::string _handleBoardGain(const ParsedCommand& cmd);
+  std::string _handleBoardAdcLoop(const ParsedCommand& cmd);
   std::string _handleBoardReset(const ParsedCommand& cmd);
   std::string _handleBoardStatus(const ParsedCommand& cmd);
 
@@ -109,6 +126,12 @@ private:
   bool _checkInitialized(std::string& errorResponse);
   bool _validateSampleCount(int numSamples, std::string& errorResponse);
   bool _validateDecimation(int decimation, std::string& errorResponse);
+
+  // ADC input protection helpers
+  bool _updateAdcOverdriveEstimate();
+  std::string _buildOverdriveSuffix();
+  void _refreshGainCacheFromBoard();
+  void _resetGainCache();
 
   /**
    * @brief Wait for measurement completion with timeout
@@ -127,6 +150,12 @@ private:
   std::unique_ptr<ResonanceAnalyzer> m_resonanceAnalyzer;
 
   SystemStatus m_status;
+
+  /** Cached board input gains; updated on BOARD:GAIN/RESET, parsed from the
+   *  board STATUS block on SYSTEM:INIT so the estimate starts from real state */
+  GainSetting m_channelGains[IElectronicBoard::NUM_CHANNELS];
+  /** Amplitude of the last commanded excitation (fraction of +/-1 V DAC FS) */
+  float m_lastExcitationAmplitude;
 };
 
 } // namespace AFM

@@ -139,4 +139,81 @@ TEST_F(BoardProtocolTest, NoResponseSetsGenericError)
   EXPECT_EQ(m_protocol->getLastError(), "No response from board");
 }
 
+TEST(BoardGainStatusParseTest, ParsesRoutingAndGainSection)
+{
+  GainSetting gains[4] = {GainSetting::GAIN_1, GainSetting::GAIN_1,
+                          GainSetting::GAIN_1, GainSetting::GAIN_1};
+  bool valid[4] = {false, false, false, false};
+
+  const std::string status = "\r\n=== MUX Status ===\r\nRouting:\r\n"
+                             "  OUT1 <- IN2\r\n  OUT2 <- X (disconnected)\r\n"
+                             "Gains:\r\n  IN1: x2\r\n  IN2: x1\r\n  IN3: x1/8\r\n"
+                             "  IN4: x16\r\n==================\r\n";
+  ASSERT_TRUE(BoardProtocol::parseGainStatus(status, gains, valid, 4));
+  EXPECT_TRUE(valid[0]);
+  EXPECT_TRUE(valid[1]);
+  EXPECT_TRUE(valid[2]);
+  EXPECT_TRUE(valid[3]);
+  EXPECT_EQ(gains[0], GainSetting::GAIN_2);
+  EXPECT_EQ(gains[1], GainSetting::GAIN_1);
+  EXPECT_EQ(gains[2], GainSetting::GAIN_1_8);
+  EXPECT_EQ(gains[3], GainSetting::GAIN_16);
+}
+
+TEST(BoardGainStatusParseTest, IgnoresRoutingLinesAndForeignText)
+{
+  GainSetting gains[4] = {GainSetting::GAIN_1, GainSetting::GAIN_1,
+                          GainSetting::GAIN_1, GainSetting::GAIN_1};
+  bool valid[4] = {false, false, false, false};
+
+  // "OUT1 <- IN2" and "PIN1: x2" must not be mistaken for gain lines
+  const std::string status = "Gains:\r\n  OUT1 <- IN2\r\n  PIN1: x2\r\n"
+                             "  IN3: x4\r\n";
+  ASSERT_TRUE(BoardProtocol::parseGainStatus(status, gains, valid, 4));
+  EXPECT_FALSE(valid[0]);
+  EXPECT_FALSE(valid[1]);
+  EXPECT_TRUE(valid[2]);
+  EXPECT_FALSE(valid[3]);
+  EXPECT_EQ(gains[2], GainSetting::GAIN_4);
+}
+
+TEST(BoardGainStatusParseTest, UnknownLabelLeavesChannelInvalid)
+{
+  GainSetting gains[4] = {GainSetting::GAIN_1, GainSetting::GAIN_1,
+                          GainSetting::GAIN_1, GainSetting::GAIN_1};
+  bool valid[4] = {false, false, false, false};
+
+  const std::string status = "Gains:\n  IN1: x12\n  IN2: x\n  IN3: x8\n";
+  ASSERT_TRUE(BoardProtocol::parseGainStatus(status, gains, valid, 4));
+  EXPECT_FALSE(valid[0]);
+  EXPECT_FALSE(valid[1]);
+  EXPECT_TRUE(valid[2]);
+  EXPECT_EQ(gains[2], GainSetting::GAIN_8);
+}
+
+TEST(BoardGainStatusParseTest, ReturnsFalseWithoutGainSection)
+{
+  GainSetting gains[4] = {};
+  bool valid[4] = {true, true, true, true};
+
+  EXPECT_FALSE(BoardProtocol::parseGainStatus("no gains here", gains, valid, 4));
+  EXPECT_FALSE(valid[0]);
+  EXPECT_FALSE(valid[1]);
+  EXPECT_FALSE(valid[2]);
+  EXPECT_FALSE(valid[3]);
+}
+
+TEST(BoardGainStatusParseTest, RespectsNumChannelsBound)
+{
+  GainSetting gains[4] = {};
+  bool valid[4] = {};
+
+  const std::string status = "Gains:\n  IN1: x16\n  IN4: x2\n";
+  ASSERT_TRUE(BoardProtocol::parseGainStatus(status, gains, valid, 2));
+  EXPECT_TRUE(valid[0]);
+  EXPECT_EQ(gains[0], GainSetting::GAIN_16);
+  // Channel 4 is outside the declared bound and must not be written
+  EXPECT_FALSE(valid[3]);
+}
+
 } // namespace

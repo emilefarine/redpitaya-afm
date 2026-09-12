@@ -28,6 +28,7 @@
 #include "LineBuffer.h"
 #include "IElectronicBoard.h"
 
+#include <array>
 #include <cstdint>
 #include <string>
 
@@ -81,6 +82,19 @@ public:
    * @return true if successful
    */
   bool getStatus(std::string& statusOut) override;
+
+  /**
+   * @brief Query the gain of every input channel
+   *
+   * Reads the board STATUS block and parses its gain section; each channel
+   * whose gain could not be recovered is reported invalid in validOut.
+   *
+   * @param gainsOut Receives the gain of each channel (indexed 0-3)
+   * @param validOut Receives whether each gain was successfully read
+   * @return true on transport success
+   */
+  bool queryGains(std::array<GainSetting, IElectronicBoard::NUM_CHANNELS>& gainsOut,
+                  std::array<bool, IElectronicBoard::NUM_CHANNELS>& validOut) override;
 
   /**
    * @brief Reset board to defaults
