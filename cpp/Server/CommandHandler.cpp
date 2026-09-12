@@ -10,13 +10,11 @@
 #include "Protocol.h"
 
 #include <algorithm>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
-#include <string>
 #include <thread>
 
 #ifndef M_PI
@@ -53,30 +51,6 @@ private:
   IRedPitayaHardware& m_hardware;
 };
 
-/**
- * @brief Map a gain label printed by the board ("1/8".."16") to GainSetting
- */
-GainSetting gainFromLabel(const std::string& label)
-{
-  if (label == "1/8")
-    return GainSetting::GAIN_1_8;
-  if (label == "1/4")
-    return GainSetting::GAIN_1_4;
-  if (label == "1/2")
-    return GainSetting::GAIN_1_2;
-  if (label == "1")
-    return GainSetting::GAIN_1;
-  if (label == "2")
-    return GainSetting::GAIN_2;
-  if (label == "4")
-    return GainSetting::GAIN_4;
-  if (label == "8")
-    return GainSetting::GAIN_8;
-  if (label == "16")
-    return GainSetting::GAIN_16;
-  return GainSetting::GAIN_1;
-}
-
 } // namespace
 
 CommandHandler::CommandHandler(HardwareFactory hardwareFactory,
@@ -94,7 +68,7 @@ CommandHandler::CommandHandler(HardwareFactory hardwareFactory,
     , m_lastExcitationAmplitude(1.0f)
 {
   m_status.mode = mode;
-  _resetAdcSafetyState();
+  _resetGainCache();
 }
 
 CommandHandler::~CommandHandler()
@@ -188,7 +162,12 @@ std::string CommandHandler::_handleRst(const ParsedCommand& cmd)
   m_signalGen.reset();
   m_fftProcessor.reset();
   m_resonanceAnalyzer.reset();
-  _resetAdcSafetyState();
+  // The gain cache becomes stale here because *RST does not reset the
+  // physical board. This is safe only because *RST also clears
+  // loopMonitorEnabled, and re-enabling the monitor requires SYSTEM:INIT,
+  // which re-reads the gains from the board. Keep that pairing intact.
+  _resetGainCache();
+  m_lastExcitationAmplitude = 1.0f;
   OperatingMode mode = m_status.mode;
   m_status = SystemStatus();
   m_status.mode = mode;
@@ -226,6 +205,9 @@ std::string CommandHandler::_handleSystMode(const ParsedCommand& cmd)
 std::string CommandHandler::_handleSystStatus(const ParsedCommand& cmd)
 {
   (void)cmd;
+
+  // Recompute the estimate so the reported state can never be stale
+  _updateAdcOverdriveEstimate();
 
   std::ostringstream oss;
   oss << "HW_INIT=" << (m_status.hardwareInitialized ? "1" : "0")
@@ -466,6 +448,11 @@ std::string CommandHandler::_handleBoardAdcLoop(const ParsedCommand& cmd)
   // Query: report the current loop configuration
   if (cmd.args.empty())
   {
+    if (!cmd.isQuery)
+    {
+      return buildErrorResponse(ResponseStatus::ERR_SYNTAX,
+                                "Usage: BOARD:ADC:LOOP <excite_ch>,<return_ch> | OFF");
+    }
     if (m_status.loopMonitorEnabled)
     {
       // Reply with 1-based channel numbers matching board connector labels
@@ -619,13 +606,12 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_PARAM, "amplitude must be in ]0, 1]");
   }
 
-  // Track the excitation for the ADC overdrive estimate; the warning itself
-  // is reported via SYSTEM:STATUS because the DATA reply format must stay
-  // unchanged for byte-count based clients.
+  // Track the excitation for the ADC overdrive estimate; the estimate is
+  // recomputed lazily by SYSTEM:STATUS because the DATA reply format must
+  // stay unchanged for byte-count based clients.
   m_lastExcitationAmplitude = amplitude;
   m_status.adcSaturated = false;
   m_status.adcSaturationRatio = 0.0f;
-  (void)_buildOverdriveSuffix();
 
   uint16_t dec = static_cast<uint16_t>(decimation);
   double centerHz = centerKHz * 1000.0;
@@ -777,7 +763,6 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
   m_lastExcitationAmplitude = amplitude;
   m_status.adcSaturated = false;
   m_status.adcSaturationRatio = 0.0f;
-  (void)_buildOverdriveSuffix();
 
   uint16_t dec = static_cast<uint16_t>(decimation);
   double nyquistKHz = ServerConfig::ADC_SAMPLE_RATE_HZ / (2.0 * dec) / 1000.0;
@@ -952,32 +937,41 @@ bool CommandHandler::_validateDecimation(int decimation, std::string& errorRespo
   return true;
 }
 
-std::string CommandHandler::_buildOverdriveSuffix()
+bool CommandHandler::_updateAdcOverdriveEstimate()
 {
-  m_status.adcOverdrive = false;
-
-  if (!m_status.loopMonitorEnabled)
+  if (!m_status.loopMonitorEnabled || !m_status.boardConnected)
   {
-    return "";
+    m_status.adcOverdrive = false;
+    return false;
   }
 
   const size_t excite = m_status.loopExciteChannel;
   const size_t ret = m_status.loopReturnChannel;
   if (excite >= IElectronicBoard::NUM_CHANNELS || ret >= IElectronicBoard::NUM_CHANNELS)
   {
-    return "";
+    m_status.adcOverdrive = false;
+    return false;
   }
 
-  const GainSetting exciteGain = m_channelGains[excite];
-  const GainSetting returnGain = m_channelGains[ret];
-  const float peak =
-      InputSafety::estimateAdcPeak(m_lastExcitationAmplitude, exciteGain, returnGain);
+  const float peak = InputSafety::estimateAdcPeak(
+      m_lastExcitationAmplitude, m_channelGains[excite], m_channelGains[ret]);
   m_status.adcOverdrive = peak > InputSafety::ADC_FULL_SCALE;
+  return m_status.adcOverdrive;
+}
 
-  if (!m_status.adcOverdrive)
+std::string CommandHandler::_buildOverdriveSuffix()
+{
+  if (!_updateAdcOverdriveEstimate())
   {
     return "";
   }
+
+  const size_t excite = m_status.loopExciteChannel;
+  const size_t ret = m_status.loopReturnChannel;
+  const GainSetting exciteGain = m_channelGains[excite];
+  const GainSetting returnGain = m_channelGains[ret];
+  const float peak = InputSafety::estimateAdcPeak(m_lastExcitationAmplitude, exciteGain,
+                                                  returnGain);
 
   std::ostringstream oss;
   oss << " WARN: expected ADC peak ~" << std::fixed << std::setprecision(2) << peak
@@ -987,24 +981,36 @@ std::string CommandHandler::_buildOverdriveSuffix()
   if (InputSafety::maxSafeReturnGain(m_lastExcitationAmplitude, exciteGain, safeGain))
   {
     oss << "; suggested: BOARD:GAIN " << static_cast<int>(ret + 1) << ","
-        << static_cast<int>(safeGain);
+        << static_cast<int>(IElectronicBoard::gainToIndex(safeGain));
   }
   else
   {
     const float maxAmplitude =
         InputSafety::ADC_FULL_SCALE /
-        (IElectronicBoard::gainFactor(exciteGain) *
-         IElectronicBoard::gainFactor(GainSetting::GAIN_1_8));
-    oss << "; no safe return gain, reduce excitation amplitude to <= " << maxAmplitude;
+        (IElectronicBoard::gainFactor(exciteGain) * IElectronicBoard::gainFactor(returnGain));
+
+    GainSetting safeExcite = GainSetting::GAIN_1;
+    if (InputSafety::maxSafeExciteGain(m_lastExcitationAmplitude, returnGain, safeExcite))
+    {
+      oss << "; suggested: BOARD:GAIN " << static_cast<int>(excite + 1) << ","
+          << static_cast<int>(IElectronicBoard::gainToIndex(safeExcite))
+          << " or excitation amplitude <= " << maxAmplitude;
+    }
+    else
+    {
+      oss << "; reduce excitation amplitude to <= " << maxAmplitude;
+    }
   }
   return oss.str();
 }
 
 void CommandHandler::_refreshGainCacheFromBoard()
 {
+  // Seed with the most conservative gain: unknown board state must never
+  // silently weaken the overdrive estimate (fail-safe default)
   for (auto& cachedGain : m_channelGains)
   {
-    cachedGain = GainSetting::GAIN_1;
+    cachedGain = GainSetting::GAIN_16;
   }
 
   if (!m_board)
@@ -1012,68 +1018,25 @@ void CommandHandler::_refreshGainCacheFromBoard()
     return;
   }
 
-  std::string status;
-  if (!m_board->getStatus(status))
+  std::array<GainSetting, IElectronicBoard::NUM_CHANNELS> gains;
+  std::array<bool, IElectronicBoard::NUM_CHANNELS> valid;
+  if (!m_board->queryGains(gains, valid))
   {
-    return;
+    return; // keep the conservative x16 seed on transport failure
   }
 
-  // Parse the "IN<n>: x<label>" gain lines printed by the board firmware.
-  // Other lines (e.g. "OUT1 <- IN2") do not contain the colon delimiter.
-  size_t pos = 0;
-  while ((pos = status.find("IN", pos)) != std::string::npos)
+  for (size_t i = 0; i < IElectronicBoard::NUM_CHANNELS; ++i)
   {
-    pos += 2;
-    if (pos >= status.size())
-    {
-      break;
-    }
-    if (status[pos] < '1' || status[pos] > '4')
-    {
-      continue;
-    }
-    const size_t channel = static_cast<size_t>(status[pos] - '1');
-    ++pos;
-
-    // Gain lines have the form "IN<n>: x<label>"; skip other IN references
-    if (pos >= status.size() || status[pos] != ':')
-    {
-      continue;
-    }
-    ++pos;
-    const size_t xPos = status.find('x', pos);
-    const size_t lineEnd = status.find('\n', pos);
-    if (xPos == std::string::npos || (lineEnd != std::string::npos && xPos > lineEnd))
-    {
-      continue;
-    }
-
-    // Collect the label characters (digits and the '/' of fractional gains)
-    size_t labelStart = xPos + 1;
-    size_t labelEnd = labelStart;
-    while (labelEnd < status.size() &&
-           (std::isdigit(static_cast<unsigned char>(status[labelEnd])) ||
-            status[labelEnd] == '/'))
-    {
-      ++labelEnd;
-    }
-    if (labelEnd == labelStart)
-    {
-      continue;
-    }
-
-    m_channelGains[channel] = gainFromLabel(status.substr(labelStart, labelEnd - labelStart));
-    pos = labelEnd;
+    m_channelGains[i] = valid[i] ? gains[i] : GainSetting::GAIN_16;
   }
 }
 
-void CommandHandler::_resetAdcSafetyState()
+void CommandHandler::_resetGainCache()
 {
   for (auto& cachedGain : m_channelGains)
   {
     cachedGain = GainSetting::GAIN_1;
   }
-  m_lastExcitationAmplitude = 1.0f;
 }
 
 bool CommandHandler::_waitForMeasurement()

@@ -86,6 +86,14 @@ protected:
     ON_CALL(*m_rawHw, initialize()).WillByDefault(Return(true));
     ON_CALL(*m_rawHw, getDecimation()).WillByDefault(Return(64));
     ON_CALL(*m_rawBoard, initialize()).WillByDefault(Return(boardConnected));
+    // Default board state: all gains at x1 (matching BOARD:RESET defaults)
+    ON_CALL(*m_rawBoard, queryGains(_, _))
+        .WillByDefault(Invoke([](std::array<GainSetting, 4>& gains,
+                                 std::array<bool, 4>& valid) {
+          gains.fill(GainSetting::GAIN_1);
+          valid.fill(true);
+          return true;
+        }));
 
     std::string resp = send("SYSTEM:INIT");
     EXPECT_EQ(resp.compare(0, 2, "OK"), 0) << resp;
@@ -924,15 +932,15 @@ TEST_F(CommandHandlerTest, BoardGainWarnsWhenExciteBoostSaturatesAdc)
   initHardware(true);
   EXPECT_EQ(send("BOARD:ADC:LOOP 1,3"), "OK 1,3\n");
 
-  // x16 boost at default amplitude 1.0 clamps at the board rail: even x1/8
-  // on the return channel leaves ~1.31 V at the ADC
+  // x16 boost at default amplitude 1.0 clamps at the board rail; the
+  // suggestion falls back to the excite channel (x1 keeps ret x1 safe)
   EXPECT_CALL(*m_rawBoard, setGain(0, GainSetting::GAIN_16)).WillOnce(Return(true));
   std::string resp = send("BOARD:GAIN 1,7");
   EXPECT_EQ(resp.compare(0, 6, "OK 16 "), 0) << resp;
   EXPECT_NE(resp.find("WARN"), std::string::npos);
   EXPECT_NE(resp.find("10.50"), std::string::npos);
-  EXPECT_NE(resp.find("no safe return gain"), std::string::npos);
-  EXPECT_NE(resp.find("0.50"), std::string::npos);
+  EXPECT_NE(resp.find("suggested: BOARD:GAIN 1,3"), std::string::npos);
+  EXPECT_NE(resp.find("excitation amplitude <= 0.06"), std::string::npos);
   EXPECT_NE(send("SYSTEM:STATUS?").find("OVERDRIVE=1"), std::string::npos);
 }
 
@@ -1033,11 +1041,12 @@ TEST_F(CommandHandlerTest, InitParsesBoardGainStatus)
   ON_CALL(*m_rawHw, initialize()).WillByDefault(Return(true));
   ON_CALL(*m_rawHw, getDecimation()).WillByDefault(Return(64));
   ON_CALL(*m_rawBoard, initialize()).WillByDefault(Return(true));
-  ON_CALL(*m_rawBoard, getStatus(_))
-      .WillByDefault(Invoke([](std::string& out) {
-        out = "\r\n=== MUX Status ===\r\nRouting:\r\n  OUT1 <- IN2\r\n"
-              "  OUT2 <- X (disconnected)\r\nGains:\r\n  IN1: x2\r\n  IN2: x1\r\n"
-              "  IN3: x1\r\n  IN4: x1\r\n==================\r\n";
+  ON_CALL(*m_rawBoard, queryGains(_, _))
+      .WillByDefault(Invoke([](std::array<GainSetting, 4>& gains,
+                               std::array<bool, 4>& valid) {
+        gains.fill(GainSetting::GAIN_1);
+        valid.fill(true);
+        gains[0] = GainSetting::GAIN_2; // IN1 boosted x2
         return true;
       }));
 
@@ -1055,9 +1064,13 @@ TEST_F(CommandHandlerTest, InitParsesFractionalGainLabels)
   ON_CALL(*m_rawHw, initialize()).WillByDefault(Return(true));
   ON_CALL(*m_rawHw, getDecimation()).WillByDefault(Return(64));
   ON_CALL(*m_rawBoard, initialize()).WillByDefault(Return(true));
-  ON_CALL(*m_rawBoard, getStatus(_))
-      .WillByDefault(Invoke([](std::string& out) {
-        out = "Gains:\r\n  IN1: x16\r\n  IN2: x1/8\r\n  IN3: x1/2\r\n  IN4: x1\r\n";
+  ON_CALL(*m_rawBoard, queryGains(_, _))
+      .WillByDefault(Invoke([](std::array<GainSetting, 4>& gains,
+                               std::array<bool, 4>& valid) {
+        gains.fill(GainSetting::GAIN_1);
+        valid.fill(true);
+        gains[0] = GainSetting::GAIN_16;   // IN1 x16
+        gains[1] = GainSetting::GAIN_1_8;  // IN2 x1/8
         return true;
       }));
 
@@ -1067,6 +1080,91 @@ TEST_F(CommandHandlerTest, InitParsesFractionalGainLabels)
   std::string resp = send("BOARD:ADC:LOOP 1,2");
   EXPECT_NE(resp.find("WARN"), std::string::npos);
   EXPECT_NE(resp.find("1.31"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, InitGainQueryFailureFailsSafe)
+{
+  ON_CALL(*m_rawHw, initialize()).WillByDefault(Return(true));
+  ON_CALL(*m_rawHw, getDecimation()).WillByDefault(Return(64));
+  ON_CALL(*m_rawBoard, initialize()).WillByDefault(Return(true));
+  // Transport failure: unknown gains must degrade to x16 and warn, not x1
+  ON_CALL(*m_rawBoard, queryGains(_, _)).WillByDefault(Return(false));
+
+  ASSERT_EQ(send("SYSTEM:INIT").compare(0, 2, "OK"), 0);
+
+  std::string resp = send("BOARD:ADC:LOOP 1,3");
+  EXPECT_NE(resp.find("WARN"), std::string::npos);
+  EXPECT_NE(resp.find("168.00"), std::string::npos); // 10.5 V rail x 16
+  EXPECT_NE(send("SYSTEM:STATUS?").find("OVERDRIVE=1"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, InitGainQueryInvalidChannelFailsSafe)
+{
+  ON_CALL(*m_rawHw, initialize()).WillByDefault(Return(true));
+  ON_CALL(*m_rawHw, getDecimation()).WillByDefault(Return(64));
+  ON_CALL(*m_rawBoard, initialize()).WillByDefault(Return(true));
+  ON_CALL(*m_rawBoard, queryGains(_, _))
+      .WillByDefault(Invoke([](std::array<GainSetting, 4>& gains,
+                               std::array<bool, 4>& valid) {
+        gains.fill(GainSetting::GAIN_1);
+        valid.fill(true);
+        valid[0] = false; // IN1 gain unknown
+        return true;
+      }));
+
+  ASSERT_EQ(send("SYSTEM:INIT").compare(0, 2, "OK"), 0);
+
+  // Unknown excite gain must be estimated as x16 (rail clamped) -> warn
+  std::string resp = send("BOARD:ADC:LOOP 1,3");
+  EXPECT_NE(resp.find("WARN"), std::string::npos);
+  EXPECT_NE(resp.find("10.50"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, StatusRefreshesOverdriveEstimateAfterInit)
+{
+  ON_CALL(*m_rawHw, initialize()).WillByDefault(Return(true));
+  ON_CALL(*m_rawHw, getDecimation()).WillByDefault(Return(64));
+  ON_CALL(*m_rawBoard, initialize()).WillByDefault(Return(true));
+  ON_CALL(*m_rawBoard, queryGains(_, _))
+      .WillByDefault(Invoke([](std::array<GainSetting, 4>& gains,
+                               std::array<bool, 4>& valid) {
+        gains.fill(GainSetting::GAIN_1);
+        valid.fill(true);
+        gains[0] = GainSetting::GAIN_2; // IN1 x2: overdriving at amplitude 1.0
+        return true;
+      }));
+
+  ASSERT_EQ(send("SYSTEM:INIT").compare(0, 2, "OK"), 0);
+
+  // Configure the monitor against the first board (cached IN1 x2)
+  EXPECT_EQ(send("BOARD:ADC:LOOP 1,3").compare(0, 3, "OK "), 0);
+
+  MockRedPitayaHardware* hw2 = stageHardware();
+  MockElectronicBoard* board2 = stageBoard();
+  ON_CALL(*hw2, initialize()).WillByDefault(Return(true));
+  ON_CALL(*hw2, getDecimation()).WillByDefault(Return(64));
+  ON_CALL(*board2, initialize()).WillByDefault(Return(true));
+  ON_CALL(*board2, queryGains(_, _))
+      .WillByDefault(Invoke([](std::array<GainSetting, 4>& gains,
+                               std::array<bool, 4>& valid) {
+        gains.fill(GainSetting::GAIN_1); // board now at default gains
+        valid.fill(true);
+        return true;
+      }));
+
+  EXPECT_EQ(send("SYSTEM:DEINIT").compare(0, 2, "OK"), 0);
+  EXPECT_EQ(send("SYSTEM:INIT").compare(0, 3, "OK "), 0);
+
+  // Re-arming the monitor must evaluate against the freshly read gains
+  EXPECT_EQ(send("BOARD:ADC:LOOP 1,3"), "OK 1,3\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("OVERDRIVE=0"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, AdcLoopBareFormIsSyntaxError)
+{
+  initHardware(true);
+  EXPECT_NE(send("BOARD:ADC:LOOP").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_EQ(send("BOARD:ADC:LOOP?"), "OK OFF\n");
 }
 
 TEST_F(CommandHandlerTest, RstClearsLoopConfiguration)

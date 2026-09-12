@@ -128,9 +128,10 @@ private:
   bool _validateDecimation(int decimation, std::string& errorResponse);
 
   // ADC input protection helpers
+  bool _updateAdcOverdriveEstimate();
   std::string _buildOverdriveSuffix();
   void _refreshGainCacheFromBoard();
-  void _resetAdcSafetyState();
+  void _resetGainCache();
 
   /**
    * @brief Wait for measurement completion with timeout

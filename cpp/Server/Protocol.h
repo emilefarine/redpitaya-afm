@@ -54,6 +54,17 @@ struct ServerConfig
  *   rejected), and reports state via SYSTEM:STATUS fields LOOP, OVERDRIVE
  *   and SAT. MEASURE replies keep their "OK DATA <N> <BYTES>" format, so
  *   overdrive/saturation results are only visible in SYSTEM:STATUS.
+ *
+ *   Scope and assumptions of the monitor:
+ *   - It assumes the +/-1 V (LV) jumper position on the Red Pitaya inputs;
+ *     with the HV jumper the estimates and SAT are invalid.
+ *   - It tracks the two configured channels, not the MUX routing. If the
+ *     physical return path is rerouted, re-issue BOARD:ADC:LOOP.
+ *   - The estimate is a worst case upper bound (AFM transmitting the full
+ *     excitation back); SaturationDetector (SAT) reports actual clipping.
+ *     A MEASURE:SWEEP always completes; saturated points only raise SAT.
+ *   - Unknown board gain state degrades to the x16 assumption, so a failing
+ *     gain query produces warnings instead of silence.
  */
 #define AFM_COMMAND_LIST \
     X(IDN,                  "*IDN")                   /* IEEE 488.2: Identify */ \
