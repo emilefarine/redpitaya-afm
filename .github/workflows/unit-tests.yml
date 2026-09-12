@@ -60,6 +60,12 @@ jobs:
           cd cpp
           make test_host_san
 
+      - name: Check POSIX-only sources compile (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd cpp
+          make check_posix
+
       - name: Run host unit tests (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

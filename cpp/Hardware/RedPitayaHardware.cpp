@@ -2,7 +2,8 @@
 
 #include "DacCodec.h"
 
-#include <cmath>
+#include <cerrno>
+#include <cstring>
 #include <fcntl.h>
 #include <iostream>
 #include <sys/mman.h>
@@ -11,6 +12,8 @@
 RedPitayaHardware::RedPitayaHardware()
     : m_memFd(-1)
     , m_decimation(DEFAULT_DECIMATION)
+    , m_regs(nullptr)
+    , m_bram(nullptr)
 {
 }
 
@@ -21,11 +24,25 @@ RedPitayaHardware::~RedPitayaHardware()
 
 bool RedPitayaHardware::initialize()
 {
+  if (m_memFd >= 0)
+  {
+    std::cerr << "Error: Hardware already initialized" << std::endl;
+    return false;
+  }
+
   // Open /dev/mem for memory-mapped I/O
   m_memFd = open("/dev/mem", O_RDWR | O_SYNC);
   if (m_memFd < 0)
   {
     std::cerr << "Error: Cannot open /dev/mem. Run as root!" << std::endl;
+    return false;
+  }
+
+  // Map the register page and the whole shared-BRAM window once. Every later
+  // access is a plain memory read/write, not a mmap/munmap syscall pair.
+  if (!_mapWindows())
+  {
+    cleanup();
     return false;
   }
 
@@ -41,6 +58,7 @@ bool RedPitayaHardware::initialize()
   std::cout << "Hardware initialized" << std::endl;
 
   // Reset to known state
+  clearStatusRegister();
   resetMeasurement();
 
   if (!setDecimation(DEFAULT_DECIMATION))
@@ -53,9 +71,15 @@ bool RedPitayaHardware::initialize()
 
 void RedPitayaHardware::cleanup()
 {
-  if (m_memFd >= 0)
+  if (_isMapped())
   {
     resetMeasurement();
+  }
+
+  _unmapWindows();
+
+  if (m_memFd >= 0)
+  {
     close(m_memFd);
     m_memFd = -1;
   }
@@ -63,45 +87,46 @@ void RedPitayaHardware::cleanup()
 
 uint32_t RedPitayaHardware::getVersion()
 {
-  volatile uint32_t* versionReg = _mapRegister(REG_BASE + REG_VERSION * 4);
-  if (!versionReg)
-    return 0;
-
-  uint32_t version = *versionReg;
-  _unmapRegister(versionReg);
-
-  return version;
+  return _isMapped() ? m_regs[REG_VERSION] : 0;
 }
 
 bool RedPitayaHardware::loadGenerationSignal(const std::vector<float>& signal)
 {
-  if (signal.size() > MAX_SAMPLES)
+  if (!HardwareLimits::isValidSampleCount(signal.size()))
   {
     std::cerr << "Error: Signal too large (" << signal.size() << " > " << MAX_SAMPLES << ")"
               << std::endl;
     return false;
   }
 
-  uint32_t status = _readStatusRegister();
-  if (status & STATUS_PS_ACCESS_DENIED_BIT)
+  if (!_isMapped())
   {
-    std::cerr << "Warning: Previous BRAM access was denied (measurement may be running). "
-              << "Waiting for measurement to complete..." << std::endl;
+    std::cerr << "Error: Hardware not initialized" << std::endl;
+    return false;
   }
+
+  uint32_t status = readStatusRegister();
+  if (status & STATUS_BUSY_BIT)
+  {
+    std::cerr << "Error: Cannot load signal while a measurement is running (FSM is RUNNING)."
+              << std::endl;
+    return false;
+  }
+
+  // Clear stale sticky flags so denials caused by this transfer are visible.
+  clearStatusRegister();
 
   for (size_t i = 0; i < signal.size(); ++i)
   {
-    volatile uint32_t* addr = _mapRegister(BRAM_SHARED_BASE + i * 4);
-    if (!addr)
-    {
-      std::cerr << "Error: Failed to map BRAM_SHARED[" << i << "]" << std::endl;
-      return false;
-    }
-
     int16_t dacValue = DacCodec::voltageToDAC(signal[i]);
-    *addr = static_cast<uint32_t>(dacValue);
+    m_bram[i] = static_cast<uint32_t>(dacValue);
+  }
 
-    _unmapRegister(addr);
+  if (readStatusRegister() & STATUS_PS_ACCESS_DENIED_BIT)
+  {
+    std::cerr << "Error: BRAM write denied (measurement was running); signal is incomplete"
+              << std::endl;
+    return false;
   }
 
   return true;
@@ -109,13 +134,25 @@ bool RedPitayaHardware::loadGenerationSignal(const std::vector<float>& signal)
 
 bool RedPitayaHardware::startMeasurement(uint32_t numSamples, uint32_t delaySamples)
 {
-  if (numSamples > MAX_SAMPLES)
+  if (!HardwareLimits::isValidSampleCount(numSamples))
   {
     std::cerr << "Error: numSamples too large" << std::endl;
     return false;
   }
 
-  uint32_t status = _readStatusRegister();
+  if (!HardwareLimits::isValidDelaySamples(delaySamples))
+  {
+    std::cerr << "Error: delaySamples exceeds " << HardwareLimits::MAX_DELAY_SAMPLES << std::endl;
+    return false;
+  }
+
+  if (!_isMapped())
+  {
+    std::cerr << "Error: Hardware not initialized" << std::endl;
+    return false;
+  }
+
+  uint32_t status = readStatusRegister();
   if (status & STATUS_BUSY_BIT)
   {
     std::cerr << "Error: Measurement already in progress (FSM is RUNNING). "
@@ -126,32 +163,9 @@ bool RedPitayaHardware::startMeasurement(uint32_t numSamples, uint32_t delaySamp
   // Single-BRAM mode safety: enforce at least one sample of delay.
   uint32_t effectiveDelay = (delaySamples == 0) ? 1 : delaySamples;
 
-  // Set signal size
-  volatile uint32_t* sizeReg = _mapRegister(REG_BASE + REG_SIG_SIZE * 4);
-  if (!sizeReg)
-  {
-    return false;
-  }
-  *sizeReg = numSamples;
-  _unmapRegister(sizeReg);
-
-  // Set delay between generation and acquisition
-  volatile uint32_t* delayReg = _mapRegister(REG_BASE + REG_DELAY * 4);
-  if (!delayReg)
-  {
-    return false;
-  }
-  *delayReg = effectiveDelay;
-  _unmapRegister(delayReg);
-
-  // Start measurement
-  volatile uint32_t* startReg = _mapRegister(REG_BASE + REG_START_MEASURE * 4);
-  if (!startReg)
-  {
-    return false;
-  }
-  *startReg = 1;
-  _unmapRegister(startReg);
+  m_regs[REG_SIG_SIZE] = numSamples;
+  m_regs[REG_DELAY] = effectiveDelay;
+  m_regs[REG_START_MEASURE] = 1;
 
   return true;
 }
@@ -171,15 +185,13 @@ bool RedPitayaHardware::setDecimation(uint16_t decimation)
     return false;
   }
 
-  volatile uint32_t* decimationReg = _mapRegister(REG_BASE + REG_DECIMATION * 4);
-  if (!decimationReg)
+  if (!_isMapped())
   {
+    std::cerr << "Error: Hardware not initialized" << std::endl;
     return false;
   }
 
-  *decimationReg = static_cast<uint32_t>(decimation);
-  _unmapRegister(decimationReg);
-
+  m_regs[REG_DECIMATION] = static_cast<uint32_t>(decimation);
   m_decimation = decimation;
 
   return true;
@@ -192,44 +204,60 @@ uint16_t RedPitayaHardware::getDecimation() const
 
 bool RedPitayaHardware::isMeasurementComplete()
 {
-  volatile uint32_t* endReg = _mapRegister(REG_BASE + REG_END_MEASURE * 4);
-  if (!endReg)
+  if (!_isMapped())
   {
     return false;
   }
-
-  bool isComplete = (*endReg == 1);
-  _unmapRegister(endReg);
-
-  return isComplete;
+  return m_regs[REG_END_MEASURE] == 1;
 }
 
 bool RedPitayaHardware::getAcquiredSignal(std::vector<float>& signal)
 {
-  uint32_t status = _readStatusRegister();
+  if (!HardwareLimits::isValidSampleCount(signal.size()))
+  {
+    std::cerr << "Error: Signal too large (" << signal.size() << " > " << MAX_SAMPLES << ")"
+              << std::endl;
+    return false;
+  }
+
+  if (!_isMapped())
+  {
+    std::cerr << "Error: Hardware not initialized" << std::endl;
+    return false;
+  }
+
+  uint32_t status = readStatusRegister();
   if (status & STATUS_BUSY_BIT)
   {
-    std::cerr << "Warning: Measurement still in progress (FSM is RUNNING). "
-              << "Data may be incomplete." << std::endl;
+    std::cerr << "Error: Measurement still in progress (FSM is RUNNING); data incomplete"
+              << std::endl;
+    return false;
   }
-  if (status & STATUS_PS_ACCESS_DENIED_BIT)
-  {
-    std::cerr << "Warning: Previous BRAM read was denied during measurement." << std::endl;
-  }
+
+  // Clear stale sticky flags so denials caused by this transfer are visible.
+  clearStatusRegister();
 
   for (size_t i = 0; i < signal.size(); ++i)
   {
-    volatile uint32_t* addr = _mapRegister(BRAM_SHARED_BASE + i * 4);
-    if (!addr)
-    {
-      std::cerr << "Error: Failed to map BRAM_SHARED[" << i << "]" << std::endl;
-      return false;
-    }
+    signal[i] = DacCodec::adcToVoltage(m_bram[i], m_decimation);
+  }
 
-    uint32_t rawValue = *addr;
-    signal[i] = DacCodec::adcToVoltage(rawValue, m_decimation);
+  if (readStatusRegister() & STATUS_PS_ACCESS_DENIED_BIT)
+  {
+    std::cerr << "Error: BRAM read denied (measurement was running); data is invalid"
+              << std::endl;
+    return false;
+  }
 
-    _unmapRegister(addr);
+  // A zero count means "not available": the RTL clears it when acquisition
+  // stops and its 16-bit counter wraps at exactly MAX_SAMPLES. Any other
+  // value must match the requested size.
+  uint32_t acquiredCount = m_regs[REG_COUNT_MEASURE];
+  if (!HardwareLimits::isCountConsistent(acquiredCount, signal.size()))
+  {
+    std::cerr << "Error: Acquired sample count mismatch (expected " << signal.size()
+              << ", got " << acquiredCount << ")" << std::endl;
+    return false;
   }
 
   return true;
@@ -237,85 +265,77 @@ bool RedPitayaHardware::getAcquiredSignal(std::vector<float>& signal)
 
 bool RedPitayaHardware::resetMeasurement()
 {
-  volatile uint32_t* startReg = _mapRegister(REG_BASE + REG_START_MEASURE * 4);
-  if (!startReg)
+  if (!_isMapped())
   {
     return false;
   }
 
-  *startReg = 0; // Set to IDLE state
-  _unmapRegister(startReg);
+  m_regs[REG_START_MEASURE] = 0; // Set to IDLE state
 
   return true;
 }
 
 uint32_t RedPitayaHardware::readStatusRegister()
 {
-  return _readStatusRegister();
+  return m_regs ? m_regs[REG_STATUS] : 0;
 }
 
 uint32_t RedPitayaHardware::readDelayRegister()
 {
-  volatile uint32_t* delayReg = _mapRegister(REG_BASE + REG_DELAY * 4);
-  if (!delayReg)
-    return 0;
-
-  uint32_t delay = *delayReg;
-  _unmapRegister(delayReg);
-
-  return delay;
+  return m_regs ? m_regs[REG_DELAY] : 0;
 }
 
 bool RedPitayaHardware::clearStatusRegister()
 {
-  volatile uint32_t* statusReg = _mapRegister(REG_BASE + REG_STATUS * 4);
-  if (!statusReg)
+  if (!_isMapped())
+  {
     return false;
+  }
 
   // STATUS bits are read-only from software perspective except sticky flag clear on write.
-  *statusReg = 1u;
-  _unmapRegister(statusReg);
+  m_regs[REG_STATUS] = 1u;
 
   return true;
 }
 
-uint32_t RedPitayaHardware::_readStatusRegister()
+bool RedPitayaHardware::_mapWindows()
 {
-  volatile uint32_t* statusReg = _mapRegister(REG_BASE + REG_STATUS * 4);
-  if (!statusReg)
+  void* regs =
+      mmap(nullptr, REG_WINDOW_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, m_memFd, REG_BASE);
+  if (regs == MAP_FAILED)
   {
-    return 0;
+    std::cerr << "Error: mmap failed for registers: " << std::strerror(errno) << std::endl;
+    return false;
   }
+  m_regs = static_cast<volatile uint32_t*>(regs);
 
-  uint32_t status = *statusReg;
-  _unmapRegister(statusReg);
+  void* bram = mmap(nullptr, BRAM_WINDOW_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, m_memFd,
+                    BRAM_SHARED_BASE);
+  if (bram == MAP_FAILED)
+  {
+    std::cerr << "Error: mmap failed for shared BRAM: " << std::strerror(errno) << std::endl;
+    return false;
+  }
+  m_bram = static_cast<volatile uint32_t*>(bram);
 
-  return status;
+  return true;
 }
 
-volatile uint32_t* RedPitayaHardware::_mapRegister(off_t targetAddr)
+void RedPitayaHardware::_unmapWindows()
 {
-  off_t baseAddr = targetAddr & ~MAP_MASK;
-  off_t offset = targetAddr & MAP_MASK;
-
-  void* mapBase = mmap(NULL, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, m_memFd, baseAddr);
-
-  if (mapBase == MAP_FAILED)
+  if (m_regs != nullptr)
   {
-    std::cerr << "Error: mmap failed for address 0x" << std::hex << targetAddr << std::dec
-              << std::endl;
-    return nullptr;
+    munmap(const_cast<uint32_t*>(m_regs), REG_WINDOW_SIZE);
+    m_regs = nullptr;
   }
-
-  return static_cast<volatile uint32_t*>(mapBase) + (offset / sizeof(uint32_t));
-}
-
-void RedPitayaHardware::_unmapRegister(volatile uint32_t* addr)
-{
-  if (addr)
+  if (m_bram != nullptr)
   {
-    void* mapBase = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(addr) & ~MAP_MASK);
-    munmap(mapBase, MAP_SIZE);
+    munmap(const_cast<uint32_t*>(m_bram), BRAM_WINDOW_SIZE);
+    m_bram = nullptr;
   }
 }
 
+bool RedPitayaHardware::_isMapped() const
+{
+  return m_regs != nullptr && m_bram != nullptr;
+}

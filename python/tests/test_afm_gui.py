@@ -7,6 +7,7 @@ PyQt6/pyqtgraph are not installed, so the base test run only needs numpy.
 
 import os
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -101,6 +102,54 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(self.window.board_available)
         self.assertFalse(self.window.board_panel.isEnabled())
         self.assertFalse(self.window.schematic_btn.isEnabled())
+
+    def test_measure_error_syncs_connection_ui(self):
+        from unittest import mock
+
+        server = self.make_server(lambda command, handler: "OK\n")
+        client = AFMClient("127.0.0.1", server.port, timeout=2.0)
+        client.connect()
+        self.addCleanup(client.disconnect)
+        self.window.client = client
+        self.window._update_connection_ui(True)
+
+        with mock.patch("afm_gui.QMessageBox"):
+            # Connected client: an error keeps the controls enabled.
+            self.window._on_measure_error("boom")
+            self.assertEqual(self.window.connect_btn.text(), "Disconnect")
+            self.assertTrue(self.window.measure_btn.isEnabled())
+
+            # A read timeout closes the connection; the UI must show offline.
+            client.disconnect()
+            self.window._on_measure_error("timeout")
+            self.assertEqual(self.window.connect_btn.text(), "Connect")
+            self.assertFalse(self.window.measure_btn.isEnabled())
+
+    def test_status_timeout_goes_offline(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def respond(command, handler):
+            if command == "SYSTEM:STATUS?":
+                started.set()
+                release.wait(5.0)
+            return "OK HW_INIT=0 BOARD=0 BUSY=0 DEC=64\n"
+
+        server = self.make_server(respond)
+        client = AFMClient("127.0.0.1", server.port, timeout=0.2)
+        client.connect()
+        self.addCleanup(client.disconnect)
+        self.window.client = client
+        self.window._update_connection_ui(True)
+
+        try:
+            self.window._on_refresh_status()
+        finally:
+            release.set()
+
+        self.assertTrue(started.is_set())
+        self.assertFalse(client.is_connected)
+        self.assertEqual(self.window.connect_btn.text(), "Connect")
 
     def test_peak_detection_and_display(self):
         freq = np.linspace(100.0, 200.0, 256)

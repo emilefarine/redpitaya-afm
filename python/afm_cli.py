@@ -64,6 +64,29 @@ class AFMShell(cmd.Cmd):
 
     # ------- System Commands -------
 
+    def do_connect(self, arg):
+        """(Re)connect to the server: connect [host] [port]"""
+        args = arg.split()
+        host = args[0] if args else self.client.host
+        port = self.client.port
+        if len(args) > 1:
+            try:
+                port = int(args[1])
+            except ValueError:
+                print("Error: port must be an integer")
+                return
+
+        # A read timeout closes the connection, so always start from a fresh
+        # client instead of reusing a possibly half-closed socket.
+        timeout = self.client.timeout
+        self.client.disconnect()
+        self.client = AFMClient(host, port, timeout=timeout)
+        try:
+            welcome = self.client.connect()
+            print(f"Connected to {host}:{port}: {welcome.strip()}")
+        except AFMError as e:
+            print(f"Connection failed: {e}")
+
     def do_ping(self, arg):
         """Test connection to server"""
         try:
@@ -372,6 +395,7 @@ class AFMShell(cmd.Cmd):
 Available Commands:
 -------------------------------------------------------------
 System:
+  connect [host] [port]  (Re)connect to the server
   ping            Test connection (SYSTEM:PING)
   version         Show server version (SYSTEM:VERSION)
   status          Show system status (SYSTEM:STATUS?)
