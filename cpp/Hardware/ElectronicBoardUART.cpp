@@ -158,6 +158,19 @@ bool ElectronicBoardUART::getStatus(std::string& statusOut)
   return _sendCommand("STATUS", &statusOut);
 }
 
+bool ElectronicBoardUART::queryGains(
+    std::array<GainSetting, IElectronicBoard::NUM_CHANNELS>& gainsOut,
+    std::array<bool, IElectronicBoard::NUM_CHANNELS>& validOut)
+{
+  std::string status;
+  if (!_sendCommand("STATUS", &status))
+  {
+    return false;
+  }
+  return BoardProtocol::parseGainStatus(status, gainsOut.data(), validOut.data(),
+                                        IElectronicBoard::NUM_CHANNELS);
+}
+
 bool ElectronicBoardUART::reset()
 {
   return _sendCommand("RESET");

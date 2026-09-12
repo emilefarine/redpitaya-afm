@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 
@@ -33,6 +34,10 @@ class IElectronicBoard
 public:
   virtual ~IElectronicBoard() = default;
 
+  // Number of MUX channels (declared before use in member signatures)
+  static constexpr uint8_t NUM_CHANNELS = 4;
+  static constexpr uint8_t DISCONNECTED = 0xFF;
+
   virtual bool initialize() = 0;
   virtual void close() = 0;
   virtual bool isConnected() const = 0;
@@ -62,15 +67,25 @@ public:
    */
   virtual bool getStatus(std::string& statusOut) = 0;
 
+  /**
+   * @brief Query the gain of every input channel
+   *
+   * Structured alternative to parsing the human-readable STATUS text in
+   * upper layers. validOut[i] is false when the gain of channel i could not
+   * be recovered; callers must treat invalid channels conservatively.
+   *
+   * @param gainsOut Receives the gain of each channel (indexed 0-3)
+   * @param validOut Receives whether each gain was successfully read
+   * @return true on transport success (individual channels may still be invalid)
+   */
+  virtual bool queryGains(std::array<GainSetting, NUM_CHANNELS>& gainsOut,
+                          std::array<bool, NUM_CHANNELS>& validOut) = 0;
+
   /** @brief Reset board to defaults (all outputs disconnected, all gains set to 1) */
   virtual bool reset() = 0;
 
   /** @brief Get last error message */
   virtual const std::string& getLastError() const = 0;
-
-  // Number of MUX channels
-  static constexpr uint8_t NUM_CHANNELS = 4;
-  static constexpr uint8_t DISCONNECTED = 0xFF;
 
   /**
    * @brief Get gain value as a human-readable string
@@ -105,6 +120,9 @@ public:
 
   /**
    * @brief Get the numeric gain factor of a setting (x1/8 .. x16)
+   *
+   * Unknown enum values fall back to the maximum gain (x16): the ADC
+   * overdrive estimate must degrade to the most conservative assumption.
    * @param gain Gain setting
    * @return Voltage gain factor (0.125 .. 16)
    */
@@ -130,7 +148,29 @@ public:
       return 16.0f;
 
     default:
-      return 1.0f;
+      return 16.0f;
     }
   }
+
+  /**
+   * @brief Map a gain setting to its SCPI gain index (0-7)
+   */
+  static uint8_t gainToIndex(GainSetting gain)
+  {
+    const uint8_t index = static_cast<uint8_t>(gain);
+    return index > MAX_GAIN_INDEX ? MAX_GAIN_INDEX : index;
+  }
+
+  /**
+   * @brief Map a SCPI gain index (0-7) to a gain setting
+   *
+   * Out-of-range indices degrade to the maximum gain (fail-safe).
+   */
+  static GainSetting gainFromIndex(uint8_t index)
+  {
+    return index > MAX_GAIN_INDEX ? GainSetting::GAIN_16 : static_cast<GainSetting>(index);
+  }
+
+  /** Highest valid SCPI gain index (GainSetting spans 0..7 in SCPI order) */
+  static constexpr uint8_t MAX_GAIN_INDEX = 7;
 };

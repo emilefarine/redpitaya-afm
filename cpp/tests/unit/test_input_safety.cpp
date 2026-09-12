@@ -91,4 +91,39 @@ TEST(InputSafetyTest, MaxSafeReturnGainSucceedsWithReducedAmplitude)
   EXPECT_EQ(GainSetting::GAIN_1_8, safe);
 }
 
+TEST(InputSafetyTest, MaxSafeExciteGainFindsHighestSafeSetting)
+{
+  GainSetting safe = GainSetting::GAIN_16;
+  ASSERT_TRUE(InputSafety::maxSafeExciteGain(1.0f, GainSetting::GAIN_1, safe));
+  EXPECT_EQ(GainSetting::GAIN_1, safe);
+
+  // x1/8 return tolerates up to x8 excitation (8 V clamped drive -> 1.0 V)
+  ASSERT_TRUE(InputSafety::maxSafeExciteGain(1.0f, GainSetting::GAIN_1_8, safe));
+  EXPECT_EQ(GainSetting::GAIN_8, safe);
+}
+
+TEST(InputSafetyTest, MaxSafeExciteGainAtMaximumReturnHasNoSafeSetting)
+{
+  // x16 return gain overdrives for every excitation setting at amplitude 1.0
+  GainSetting safe = GainSetting::GAIN_1;
+  EXPECT_FALSE(InputSafety::maxSafeExciteGain(1.0f, GainSetting::GAIN_16, safe));
+}
+
+TEST(InputSafetyTest, GainIndexHelpersRoundTrip)
+{
+  for (uint8_t idx = 0; idx <= IElectronicBoard::MAX_GAIN_INDEX; ++idx)
+  {
+    EXPECT_EQ(IElectronicBoard::gainToIndex(IElectronicBoard::gainFromIndex(idx)), idx);
+  }
+}
+
+TEST(InputSafetyTest, GainIndexHelpersDegradeConservatively)
+{
+  EXPECT_EQ(IElectronicBoard::gainFromIndex(8), GainSetting::GAIN_16);
+  EXPECT_EQ(IElectronicBoard::gainFromIndex(255), GainSetting::GAIN_16);
+  EXPECT_EQ(IElectronicBoard::gainToIndex(static_cast<GainSetting>(9)),
+            IElectronicBoard::MAX_GAIN_INDEX);
+  EXPECT_FLOAT_EQ(IElectronicBoard::gainFactor(static_cast<GainSetting>(9)), 16.0f);
+}
+
 } // namespace
