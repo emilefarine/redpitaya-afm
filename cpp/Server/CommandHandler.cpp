@@ -1020,6 +1020,10 @@ void CommandHandler::_refreshGainCacheFromBoard()
 
   std::array<GainSetting, IElectronicBoard::NUM_CHANNELS> gains;
   std::array<bool, IElectronicBoard::NUM_CHANNELS> valid;
+  // Value-initialize before the call: mocks (and gtest argument printing)
+  // may observe the buffers even when the query fails
+  gains.fill(GainSetting::GAIN_1);
+  valid.fill(false);
   if (!m_board->queryGains(gains, valid))
   {
     return; // keep the conservative x16 seed on transport failure
