@@ -135,7 +135,7 @@ private:
   bool _parseMeasTailArgs(const ParsedCommand& cmd, int& decimation, float& amplitude,
                           std::string& errorResponse);
   void _trackExcitationAmplitude(float amplitude);
-  bool _applyDecimation(uint16_t dec, std::string& errorResponse);
+  double _applyDecimation(uint16_t dec, std::string& errorResponse);
 
   // ADC input protection helpers
   bool _updateAdcOverdriveEstimate();

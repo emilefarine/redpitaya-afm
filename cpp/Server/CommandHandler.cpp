@@ -403,8 +403,8 @@ std::string CommandHandler::_handleBoardGain(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_PARAM, "gain_index must be 0-7");
   }
 
-  // Convert to 0-indexed for internal use
-  GainSetting gain = static_cast<GainSetting>(gainIndex);
+  // Convert to 0-indexed channel for internal use
+  GainSetting gain = IElectronicBoard::gainFromIndex(static_cast<uint8_t>(gainIndex));
   if (!m_board->setGain(static_cast<uint8_t>(channel - 1), gain))
   {
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, m_board->getLastError());
@@ -564,8 +564,6 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
   if (!_validateAmplitude(amplitude, error))
     return error;
 
-  _trackExcitationAmplitude(amplitude);
-
   uint16_t dec = static_cast<uint16_t>(decimation);
   double centerHz = centerKHz * 1000.0;
   double bandwidthHz = bandwidthKHz * 1000.0;
@@ -578,8 +576,12 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
   if (!_validateNyquist(centerHz + bandwidthHz / 2.0, dec, error))
     return error;
 
-  if (!_applyDecimation(dec, error))
+  if (_applyDecimation(dec, error) <= 0.0)
     return error;
+
+  // Track only after all validation passed: a rejected command must not
+  // clear the saturation evidence of the previous acquisition
+  _trackExcitationAmplitude(amplitude);
 
   auto signal = m_signalGen->generateSincSignal(static_cast<uint32_t>(numSamples),
                                                 static_cast<uint32_t>(centerHz),
@@ -689,8 +691,6 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
   if (!_validateAmplitude(amplitude, error))
     return error;
 
-  _trackExcitationAmplitude(amplitude);
-
   uint16_t dec = static_cast<uint16_t>(decimation);
 
   // Compute frequency range
@@ -720,10 +720,13 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
   }
   size_t numPoints = static_cast<size_t>(pointsEstimate);
 
-  if (!_applyDecimation(dec, error))
+  const double samplingFreq = _applyDecimation(dec, error);
+  if (samplingFreq <= 0.0)
     return error;
 
-  const double samplingFreq = ServerConfig::ADC_SAMPLE_RATE_HZ / dec;
+  // Track only after all validation passed: a rejected command must not
+  // clear the saturation evidence of the previous acquisition
+  _trackExcitationAmplitude(amplitude);
 
   // Use a fixed number of samples for each single-frequency measurement
   const uint32_t sweepSamples = 8192;
@@ -926,12 +929,12 @@ void CommandHandler::_trackExcitationAmplitude(float amplitude)
   m_status.adcSaturationRatio = 0.0f;
 }
 
-bool CommandHandler::_applyDecimation(uint16_t dec, std::string& errorResponse)
+double CommandHandler::_applyDecimation(uint16_t dec, std::string& errorResponse)
 {
   if (!m_hardware->setDecimation(dec))
   {
     errorResponse = buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to set decimation");
-    return false;
+    return 0.0;
   }
   m_status.currentDecimation = dec;
 
@@ -940,7 +943,7 @@ bool CommandHandler::_applyDecimation(uint16_t dec, std::string& errorResponse)
   m_signalGen = std::make_unique<SignalGenerator>(samplingFreq, dec);
   m_fftProcessor = std::make_unique<FFTProcessor>(samplingFreq);
   m_resonanceAnalyzer = std::make_unique<ResonanceAnalyzer>(samplingFreq);
-  return true;
+  return samplingFreq;
 }
 
 bool CommandHandler::_updateAdcOverdriveEstimate()

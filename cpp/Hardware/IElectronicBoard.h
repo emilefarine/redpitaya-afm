@@ -94,8 +94,8 @@ public:
    */
   static const char* gainToString(GainSetting gain)
   {
-    const uint8_t index = gainToIndex(gain);
-    return index == static_cast<uint8_t>(gain) ? c_GainTable[index].label : "?";
+    const uint8_t raw = static_cast<uint8_t>(gain);
+    return raw <= MAX_GAIN_INDEX ? c_GainTable[raw].label : "?";
   }
 
   /**
@@ -165,4 +165,20 @@ private:
       {GainSetting::GAIN_2, "2", 2.0f},       {GainSetting::GAIN_4, "4", 4.0f},
       {GainSetting::GAIN_8, "8", 8.0f},       {GainSetting::GAIN_16, "16", 16.0f},
   };
+
+  // The index/enum/SCPI mapping relies on table order matching the gain index
+  static_assert(sizeof(c_GainTable) / sizeof(c_GainTable[0]) == MAX_GAIN_INDEX + 1,
+                "c_GainTable must cover every SCPI gain index");
+  static_assert(
+      []() {
+        for (uint8_t i = 0; i <= MAX_GAIN_INDEX; ++i)
+        {
+          if (c_GainTable[i].setting != static_cast<GainSetting>(i))
+          {
+            return false;
+          }
+        }
+        return true;
+      }(),
+      "c_GainTable order must match the GainSetting enum");
 };
