@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../Hardware/HardwareLimits.h"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -26,8 +27,8 @@ struct ServerConfig
   static constexpr int SOCKET_TIMEOUT_SEC = 30;
 
   // FPGA constraint: decimation must be power-of-two in [16, 1024]
-  static constexpr uint16_t MIN_DECIMATION = 16;
-  static constexpr uint16_t MAX_DECIMATION = 1024;
+  static constexpr uint16_t MIN_DECIMATION = HardwareLimits::MIN_DECIMATION;
+  static constexpr uint16_t MAX_DECIMATION = HardwareLimits::MAX_DECIMATION;
 
   // ADC sample rate of the Red Pitaya STEMlab 125-14
   static constexpr double ADC_SAMPLE_RATE_HZ = 125000000.0;

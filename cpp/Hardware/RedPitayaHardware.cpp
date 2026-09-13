@@ -172,16 +172,9 @@ bool RedPitayaHardware::startMeasurement(uint32_t numSamples, uint32_t delaySamp
 
 bool RedPitayaHardware::setDecimation(uint16_t decimation)
 {
-  if (decimation < 16 || decimation > 1024)
+  if (!HardwareLimits::isValidDecimation(decimation))
   {
-    std::cerr << "Error: Decimation must be between 16 and 1024" << std::endl;
-    return false;
-  }
-
-  if ((decimation & (decimation - 1)) != 0)
-  {
-    std::cerr << "Error: Decimation must be a power of 2 (16, 32, 64, 128, 256, 512, 1024)"
-              << std::endl;
+    std::cerr << "Error: Decimation must be a power of 2 between 16 and 1024" << std::endl;
     return false;
   }
 

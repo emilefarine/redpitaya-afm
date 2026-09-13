@@ -94,28 +94,8 @@ public:
    */
   static const char* gainToString(GainSetting gain)
   {
-    switch (gain)
-    {
-    case GainSetting::GAIN_1_8:
-      return "1/8";
-    case GainSetting::GAIN_1_4:
-      return "1/4";
-    case GainSetting::GAIN_1_2:
-      return "1/2";
-    case GainSetting::GAIN_1:
-      return "1";
-    case GainSetting::GAIN_2:
-      return "2";
-    case GainSetting::GAIN_4:
-      return "4";
-    case GainSetting::GAIN_8:
-      return "8";
-    case GainSetting::GAIN_16:
-      return "16";
-
-    default:
-      return "?";
-    }
+    const uint8_t index = gainToIndex(gain);
+    return index == static_cast<uint8_t>(gain) ? c_GainTable[index].label : "?";
   }
 
   /**
@@ -128,28 +108,24 @@ public:
    */
   static float gainFactor(GainSetting gain)
   {
-    switch (gain)
-    {
-    case GainSetting::GAIN_1_8:
-      return 0.125f;
-    case GainSetting::GAIN_1_4:
-      return 0.25f;
-    case GainSetting::GAIN_1_2:
-      return 0.5f;
-    case GainSetting::GAIN_1:
-      return 1.0f;
-    case GainSetting::GAIN_2:
-      return 2.0f;
-    case GainSetting::GAIN_4:
-      return 4.0f;
-    case GainSetting::GAIN_8:
-      return 8.0f;
-    case GainSetting::GAIN_16:
-      return 16.0f;
+    return c_GainTable[gainToIndex(gain)].factor;
+  }
 
-    default:
-      return 16.0f;
+  /**
+   * @brief Map a board gain label ("1/8".."16") to a gain setting
+   * @return true when the label is recognized
+   */
+  static bool gainFromLabel(const std::string& label, GainSetting& settingOut)
+  {
+    for (const auto& entry : c_GainTable)
+    {
+      if (label == entry.label)
+      {
+        settingOut = entry.setting;
+        return true;
+      }
     }
+    return false;
   }
 
   /**
@@ -173,4 +149,20 @@ public:
 
   /** Highest valid SCPI gain index (GainSetting spans 0..7 in SCPI order) */
   static constexpr uint8_t MAX_GAIN_INDEX = 7;
+
+private:
+  struct GainInfo
+  {
+    GainSetting setting;
+    const char* label;
+    float factor;
+  };
+
+  // Single source of truth for gain labels and factors, indexed by SCPI gain index
+  static constexpr GainInfo c_GainTable[] = {
+      {GainSetting::GAIN_1_8, "1/8", 0.125f}, {GainSetting::GAIN_1_4, "1/4", 0.25f},
+      {GainSetting::GAIN_1_2, "1/2", 0.5f},   {GainSetting::GAIN_1, "1", 1.0f},
+      {GainSetting::GAIN_2, "2", 2.0f},       {GainSetting::GAIN_4, "4", 4.0f},
+      {GainSetting::GAIN_8, "8", 8.0f},       {GainSetting::GAIN_16, "16", 16.0f},
+  };
 };

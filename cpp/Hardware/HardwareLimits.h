@@ -14,6 +14,16 @@ namespace HardwareLimits
 
 static constexpr size_t MAX_SAMPLES = 65536; // 2^16 shared-BRAM depth
 
+// FPGA constraint: decimation must be power-of-two in [16, 1024]
+static constexpr uint16_t MIN_DECIMATION = 16;
+static constexpr uint16_t MAX_DECIMATION = 1024;
+
+constexpr bool isValidDecimation(int decimation)
+{
+  return decimation >= MIN_DECIMATION && decimation <= MAX_DECIMATION &&
+         (decimation & (decimation - 1)) == 0;
+}
+
 // measure_ctrl uses delay_eff[17:0], so larger delays alias when truncated.
 static constexpr uint32_t MAX_DELAY_SAMPLES = (1u << 18) - 1;
 
