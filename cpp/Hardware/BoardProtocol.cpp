@@ -2,38 +2,6 @@
 
 #include "IElectronicBoard.h"
 
-namespace
-{
-
-/**
- * @brief Map a gain label printed by the board ("1/8".."16") to GainSetting
- */
-bool gainLabelToSetting(const std::string& label, GainSetting& settingOut)
-{
-  struct LabelEntry
-  {
-    const char* text;
-    GainSetting setting;
-  };
-  static const LabelEntry labels[] = {
-      {"1/8", GainSetting::GAIN_1_8}, {"1/4", GainSetting::GAIN_1_4},
-      {"1/2", GainSetting::GAIN_1_2}, {"1", GainSetting::GAIN_1},
-      {"2", GainSetting::GAIN_2},     {"4", GainSetting::GAIN_4},
-      {"8", GainSetting::GAIN_8},     {"16", GainSetting::GAIN_16},
-  };
-  for (const auto& entry : labels)
-  {
-    if (label == entry.text)
-    {
-      settingOut = entry.setting;
-      return true;
-    }
-  }
-  return false;
-}
-
-} // namespace
-
 BoardProtocol::BoardProtocol(SendFn send, ReadLineFn readLine, std::string& lastError)
     : m_send(std::move(send))
     , m_readLine(std::move(readLine))
@@ -89,7 +57,8 @@ bool BoardProtocol::parseGainStatus(const std::string& statusText,
         if (xPos != std::string::npos && xPos < end)
         {
           GainSetting setting;
-          if (gainLabelToSetting(statusText.substr(xPos + 1, end - xPos - 1), setting))
+          if (IElectronicBoard::gainFromLabel(statusText.substr(xPos + 1, end - xPos - 1),
+                                              setting))
           {
             gainsOut[channel] = setting;
             validOut[channel] = true;

@@ -9,6 +9,8 @@
 
 #include "Protocol.h"
 
+#include "../Hardware/HardwareLimits.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -330,12 +332,8 @@ std::string CommandHandler::_handleSystDeinit(const ParsedCommand& cmd)
 std::string CommandHandler::_handleBoardMuxRoute(const ParsedCommand& cmd)
 {
   std::string error;
-  if (!_checkInitialized(error))
+  if (!_requireBoard(error))
     return error;
-  if (!m_status.boardConnected)
-  {
-    return _boardUnavailableError();
-  }
 
   int output, input;
   if (!cmd.getArgInt(0, output) || !cmd.getArgInt(1, input))
@@ -344,12 +342,10 @@ std::string CommandHandler::_handleBoardMuxRoute(const ParsedCommand& cmd)
   }
 
   // Accept 1-based channel numbers matching board connector labels (1-4)
-  if (output < 1 || output > IElectronicBoard::NUM_CHANNELS || input < 1 ||
-      input > IElectronicBoard::NUM_CHANNELS)
+  if (!_validateChannel1Based(output, "out", error) ||
+      !_validateChannel1Based(input, "in", error))
   {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM,
-                              "out and in must be 1-" +
-                                  std::to_string(IElectronicBoard::NUM_CHANNELS));
+    return error;
   }
 
   // Convert to 0-indexed for internal use
@@ -364,12 +360,8 @@ std::string CommandHandler::_handleBoardMuxRoute(const ParsedCommand& cmd)
 std::string CommandHandler::_handleBoardMuxDisconnect(const ParsedCommand& cmd)
 {
   std::string error;
-  if (!_checkInitialized(error))
+  if (!_requireBoard(error))
     return error;
-  if (!m_status.boardConnected)
-  {
-    return _boardUnavailableError();
-  }
 
   int output;
   if (!cmd.getArgInt(0, output))
@@ -378,12 +370,8 @@ std::string CommandHandler::_handleBoardMuxDisconnect(const ParsedCommand& cmd)
   }
 
   // Accept 1-based channel number matching board connector label (1-4)
-  if (output < 1 || output > IElectronicBoard::NUM_CHANNELS)
-  {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM,
-                              "out must be 1-" +
-                                  std::to_string(IElectronicBoard::NUM_CHANNELS));
-  }
+  if (!_validateChannel1Based(output, "out", error))
+    return error;
 
   // Convert to 0-indexed for internal use
   if (!m_board->disconnectMux(static_cast<uint8_t>(output - 1)))
@@ -397,12 +385,8 @@ std::string CommandHandler::_handleBoardMuxDisconnect(const ParsedCommand& cmd)
 std::string CommandHandler::_handleBoardGain(const ParsedCommand& cmd)
 {
   std::string error;
-  if (!_checkInitialized(error))
+  if (!_requireBoard(error))
     return error;
-  if (!m_status.boardConnected)
-  {
-    return _boardUnavailableError();
-  }
 
   int channel, gainIndex;
   if (!cmd.getArgInt(0, channel) || !cmd.getArgInt(1, gainIndex))
@@ -411,20 +395,16 @@ std::string CommandHandler::_handleBoardGain(const ParsedCommand& cmd)
   }
 
   // Accept 1-based channel number matching board connector label (1-4)
-  if (channel < 1 || channel > IElectronicBoard::NUM_CHANNELS)
-  {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM,
-                              "channel must be 1-" +
-                                  std::to_string(IElectronicBoard::NUM_CHANNELS));
-  }
+  if (!_validateChannel1Based(channel, "channel", error))
+    return error;
 
-  if (gainIndex < 0 || gainIndex > 7)
+  if (gainIndex < 0 || gainIndex > IElectronicBoard::MAX_GAIN_INDEX)
   {
     return buildErrorResponse(ResponseStatus::ERR_PARAM, "gain_index must be 0-7");
   }
 
-  // Convert to 0-indexed for internal use
-  GainSetting gain = static_cast<GainSetting>(gainIndex);
+  // Convert to 0-indexed channel for internal use
+  GainSetting gain = IElectronicBoard::gainFromIndex(static_cast<uint8_t>(gainIndex));
   if (!m_board->setGain(static_cast<uint8_t>(channel - 1), gain))
   {
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, m_board->getLastError());
@@ -438,12 +418,8 @@ std::string CommandHandler::_handleBoardGain(const ParsedCommand& cmd)
 std::string CommandHandler::_handleBoardAdcLoop(const ParsedCommand& cmd)
 {
   std::string error;
-  if (!_checkInitialized(error))
+  if (!_requireBoard(error))
     return error;
-  if (!m_status.boardConnected)
-  {
-    return _boardUnavailableError();
-  }
 
   // Query: report the current loop configuration
   if (cmd.args.empty())
@@ -486,12 +462,10 @@ std::string CommandHandler::_handleBoardAdcLoop(const ParsedCommand& cmd)
   }
 
   // Accept 1-based channel numbers matching board connector labels (1-4)
-  if (excite < 1 || excite > IElectronicBoard::NUM_CHANNELS || ret < 1 ||
-      ret > IElectronicBoard::NUM_CHANNELS)
+  if (!_validateChannel1Based(excite, "excite_ch", error) ||
+      !_validateChannel1Based(ret, "return_ch", error))
   {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM,
-                              "channels must be 1-" +
-                                  std::to_string(IElectronicBoard::NUM_CHANNELS));
+    return error;
   }
 
   m_status.loopExciteChannel = static_cast<uint8_t>(excite - 1);
@@ -508,12 +482,8 @@ std::string CommandHandler::_handleBoardReset(const ParsedCommand& cmd)
   (void)cmd;
 
   std::string error;
-  if (!_checkInitialized(error))
+  if (!_requireBoard(error))
     return error;
-  if (!m_status.boardConnected)
-  {
-    return _boardUnavailableError();
-  }
 
   if (!m_board->reset())
   {
@@ -534,12 +504,8 @@ std::string CommandHandler::_handleBoardStatus(const ParsedCommand& cmd)
   (void)cmd;
 
   std::string error;
-  if (!_checkInitialized(error))
+  if (!_requireBoard(error))
     return error;
-  if (!m_status.boardConnected)
-  {
-    return _boardUnavailableError();
-  }
 
   std::string boardStatus;
   if (!m_board->getStatus(boardStatus))
@@ -580,14 +546,8 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
   {
     return buildErrorResponse(ResponseStatus::ERR_SYNTAX, "num_samples must be an integer");
   }
-  if (cmd.args.size() > 3 && !cmd.getArgInt(3, decimation))
-  {
-    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, "decimation must be an integer");
-  }
-  if (cmd.args.size() > 4 && !cmd.getArgFloat(4, amplitude))
-  {
-    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, "amplitude must be a finite number");
-  }
+  if (!_parseMeasTailArgs(cmd, decimation, amplitude, error))
+    return error;
 
   if (!_validateSampleCount(numSamples, error))
     return error;
@@ -601,47 +561,27 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
   {
     return buildErrorResponse(ResponseStatus::ERR_PARAM, "bandwidth_kHz must be > 0");
   }
-  if (amplitude <= 0.0f || amplitude > 1.0f)
-  {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM, "amplitude must be in ]0, 1]");
-  }
-
-  // Track the excitation for the ADC overdrive estimate; the estimate is
-  // recomputed lazily by SYSTEM:STATUS because the DATA reply format must
-  // stay unchanged for byte-count based clients.
-  m_lastExcitationAmplitude = amplitude;
-  m_status.adcSaturated = false;
-  m_status.adcSaturationRatio = 0.0f;
+  if (!_validateAmplitude(amplitude, error))
+    return error;
 
   uint16_t dec = static_cast<uint16_t>(decimation);
   double centerHz = centerKHz * 1000.0;
   double bandwidthHz = bandwidthKHz * 1000.0;
-  double nyquistHz = ServerConfig::ADC_SAMPLE_RATE_HZ / (2.0 * dec);
 
   if (bandwidthHz < 1.0)
   {
     return buildErrorResponse(ResponseStatus::ERR_PARAM, "bandwidth must be at least 1 Hz");
   }
 
-  if (centerHz + bandwidthHz / 2.0 >= nyquistHz)
-  {
-    std::ostringstream oss;
-    oss << "excitation band exceeds Nyquist (" << std::fixed << std::setprecision(3)
-        << nyquistHz / 1000.0 << " kHz) at decimation " << dec;
-    return buildErrorResponse(ResponseStatus::ERR_PARAM, oss.str());
-  }
+  if (!_validateNyquist(centerHz + bandwidthHz / 2.0, dec, error))
+    return error;
 
-  if (!m_hardware->setDecimation(dec))
-  {
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to set decimation");
-  }
-  m_status.currentDecimation = dec;
+  if (_applyDecimation(dec, error) <= 0.0)
+    return error;
 
-  // Recreate signal processing chain with updated sampling frequency
-  double samplingFreq = ServerConfig::ADC_SAMPLE_RATE_HZ / dec;
-  m_signalGen = std::make_unique<SignalGenerator>(samplingFreq, dec);
-  m_fftProcessor = std::make_unique<FFTProcessor>(samplingFreq);
-  m_resonanceAnalyzer = std::make_unique<ResonanceAnalyzer>(samplingFreq);
+  // Track only after all validation passed: a rejected command must not
+  // clear the saturation evidence of the previous acquisition
+  _trackExcitationAmplitude(amplitude);
 
   auto signal = m_signalGen->generateSincSignal(static_cast<uint32_t>(numSamples),
                                                 static_cast<uint32_t>(centerHz),
@@ -730,14 +670,8 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
   {
     return buildErrorResponse(ResponseStatus::ERR_SYNTAX, "step_kHz must be a finite number");
   }
-  if (cmd.args.size() > 3 && !cmd.getArgInt(3, decimation))
-  {
-    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, "decimation must be an integer");
-  }
-  if (cmd.args.size() > 4 && !cmd.getArgFloat(4, amplitude))
-  {
-    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, "amplitude must be a finite number");
-  }
+  if (!_parseMeasTailArgs(cmd, decimation, amplitude, error))
+    return error;
 
   // Validate
   if (!_validateDecimation(decimation, error))
@@ -754,18 +688,10 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
   {
     return buildErrorResponse(ResponseStatus::ERR_PARAM, "step_kHz must be > 0");
   }
-  if (amplitude <= 0.0f || amplitude > 1.0f)
-  {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM, "amplitude must be in ]0, 1]");
-  }
-
-  // Track the excitation for the ADC overdrive estimate (see _handleMeasSinc)
-  m_lastExcitationAmplitude = amplitude;
-  m_status.adcSaturated = false;
-  m_status.adcSaturationRatio = 0.0f;
+  if (!_validateAmplitude(amplitude, error))
+    return error;
 
   uint16_t dec = static_cast<uint16_t>(decimation);
-  double nyquistKHz = ServerConfig::ADC_SAMPLE_RATE_HZ / (2.0 * dec) / 1000.0;
 
   // Compute frequency range
   double startKHz = centerKHz - rangeKHz / 2.0;
@@ -773,13 +699,8 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
   if (startKHz < 0.0)
     startKHz = 0.0;
 
-  if (stopKHz >= nyquistKHz)
-  {
-    std::ostringstream oss;
-    oss << "sweep stop frequency exceeds Nyquist (" << std::fixed << std::setprecision(3)
-        << nyquistKHz << " kHz) at decimation " << dec;
-    return buildErrorResponse(ResponseStatus::ERR_PARAM, oss.str());
-  }
+  if (!_validateNyquist(stopKHz * 1000.0, dec, error))
+    return error;
 
   double pointsEstimate = std::floor((stopKHz - startKHz) / stepKHz) + 1.0;
   if (pointsEstimate > static_cast<double>(ServerConfig::MAX_SWEEP_POINTS))
@@ -799,15 +720,13 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
   }
   size_t numPoints = static_cast<size_t>(pointsEstimate);
 
-  if (!m_hardware->setDecimation(dec))
-  {
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to set decimation");
-  }
-  m_status.currentDecimation = dec;
+  const double samplingFreq = _applyDecimation(dec, error);
+  if (samplingFreq <= 0.0)
+    return error;
 
-  // Recreate signal generator with updated sampling frequency
-  double samplingFreq = ServerConfig::ADC_SAMPLE_RATE_HZ / dec;
-  m_signalGen = std::make_unique<SignalGenerator>(samplingFreq, dec);
+  // Track only after all validation passed: a rejected command must not
+  // clear the saturation evidence of the previous acquisition
+  _trackExcitationAmplitude(amplitude);
 
   // Use a fixed number of samples for each single-frequency measurement
   const uint32_t sweepSamples = 8192;
@@ -907,6 +826,33 @@ bool CommandHandler::_checkInitialized(std::string& errorResponse)
   return true;
 }
 
+bool CommandHandler::_requireBoard(std::string& errorResponse)
+{
+  if (!_checkInitialized(errorResponse))
+  {
+    return false;
+  }
+  if (!m_status.boardConnected)
+  {
+    errorResponse = _boardUnavailableError();
+    return false;
+  }
+  return true;
+}
+
+bool CommandHandler::_validateChannel1Based(int channel, const char* name,
+                                            std::string& errorResponse)
+{
+  if (channel < 1 || channel > IElectronicBoard::NUM_CHANNELS)
+  {
+    errorResponse = buildErrorResponse(ResponseStatus::ERR_PARAM,
+                                       std::string(name) + " must be 1-" +
+                                           std::to_string(IElectronicBoard::NUM_CHANNELS));
+    return false;
+  }
+  return true;
+}
+
 bool CommandHandler::_validateSampleCount(int numSamples, std::string& errorResponse)
 {
   if (numSamples <= 0 || numSamples > static_cast<int>(IRedPitayaHardware::MAX_SAMPLES))
@@ -921,13 +867,7 @@ bool CommandHandler::_validateSampleCount(int numSamples, std::string& errorResp
 
 bool CommandHandler::_validateDecimation(int decimation, std::string& errorResponse)
 {
-  if (decimation < 16 || decimation > 1024)
-  {
-    errorResponse =
-        buildErrorResponse(ResponseStatus::ERR_PARAM, "decimation must be 16-1024 (power of 2)");
-    return false;
-  }
-  if ((decimation & (decimation - 1)) != 0)
+  if (!HardwareLimits::isValidDecimation(decimation))
   {
     errorResponse =
         buildErrorResponse(ResponseStatus::ERR_PARAM,
@@ -935,6 +875,75 @@ bool CommandHandler::_validateDecimation(int decimation, std::string& errorRespo
     return false;
   }
   return true;
+}
+
+bool CommandHandler::_validateAmplitude(float amplitude, std::string& errorResponse)
+{
+  if (amplitude <= 0.0f || amplitude > 1.0f)
+  {
+    errorResponse = buildErrorResponse(ResponseStatus::ERR_PARAM, "amplitude must be in ]0, 1]");
+    return false;
+  }
+  return true;
+}
+
+bool CommandHandler::_validateNyquist(double stopHz, uint16_t dec, std::string& errorResponse)
+{
+  double nyquistHz = ServerConfig::ADC_SAMPLE_RATE_HZ / (2.0 * dec);
+  if (stopHz >= nyquistHz)
+  {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(3) << "stop frequency exceeds Nyquist ("
+        << nyquistHz / 1000.0 << " kHz) at decimation " << dec;
+    errorResponse = buildErrorResponse(ResponseStatus::ERR_PARAM, oss.str());
+    return false;
+  }
+  return true;
+}
+
+bool CommandHandler::_parseMeasTailArgs(const ParsedCommand& cmd, int& decimation,
+                                        float& amplitude, std::string& errorResponse)
+{
+  if (cmd.args.size() > 3 && !cmd.getArgInt(3, decimation))
+  {
+    errorResponse =
+        buildErrorResponse(ResponseStatus::ERR_SYNTAX, "decimation must be an integer");
+    return false;
+  }
+  if (cmd.args.size() > 4 && !cmd.getArgFloat(4, amplitude))
+  {
+    errorResponse =
+        buildErrorResponse(ResponseStatus::ERR_SYNTAX, "amplitude must be a finite number");
+    return false;
+  }
+  return true;
+}
+
+void CommandHandler::_trackExcitationAmplitude(float amplitude)
+{
+  // Track the excitation for the ADC overdrive estimate; the estimate is
+  // recomputed lazily by SYSTEM:STATUS because the DATA reply format must
+  // stay unchanged for byte-count based clients.
+  m_lastExcitationAmplitude = amplitude;
+  m_status.adcSaturated = false;
+  m_status.adcSaturationRatio = 0.0f;
+}
+
+double CommandHandler::_applyDecimation(uint16_t dec, std::string& errorResponse)
+{
+  if (!m_hardware->setDecimation(dec))
+  {
+    errorResponse = buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to set decimation");
+    return 0.0;
+  }
+  m_status.currentDecimation = dec;
+
+  // Recreate signal processing chain with updated sampling frequency
+  double samplingFreq = ServerConfig::ADC_SAMPLE_RATE_HZ / dec;
+  m_signalGen = std::make_unique<SignalGenerator>(samplingFreq, dec);
+  m_fftProcessor = std::make_unique<FFTProcessor>(samplingFreq);
+  m_resonanceAnalyzer = std::make_unique<ResonanceAnalyzer>(samplingFreq);
+  return samplingFreq;
 }
 
 bool CommandHandler::_updateAdcOverdriveEstimate()

@@ -124,8 +124,18 @@ private:
 
   std::string _boardUnavailableError() const;
   bool _checkInitialized(std::string& errorResponse);
+  bool _requireBoard(std::string& errorResponse);
   bool _validateSampleCount(int numSamples, std::string& errorResponse);
   bool _validateDecimation(int decimation, std::string& errorResponse);
+  bool _validateChannel1Based(int channel, const char* name, std::string& errorResponse);
+  bool _validateAmplitude(float amplitude, std::string& errorResponse);
+  bool _validateNyquist(double stopHz, uint16_t dec, std::string& errorResponse);
+
+  // Shared by the MEASURE handlers
+  bool _parseMeasTailArgs(const ParsedCommand& cmd, int& decimation, float& amplitude,
+                          std::string& errorResponse);
+  void _trackExcitationAmplitude(float amplitude);
+  double _applyDecimation(uint16_t dec, std::string& errorResponse);
 
   // ADC input protection helpers
   bool _updateAdcOverdriveEstimate();
