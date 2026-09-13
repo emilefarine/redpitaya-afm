@@ -159,6 +159,9 @@ class SystemStatus:
     measurement_in_progress: bool = False
     decimation: int = 64
     mode: OperatingMode = OperatingMode.FULL
+    adc_loop: Optional[str] = None  # "<excite>,<return>" channel pair, None when off
+    adc_overdrive: bool = False     # Predicted excitation saturates the +/-1 V ADC input
+    adc_saturated: bool = False     # Saturation detected in the last acquisition
 
     @classmethod
     def from_response(cls, response: str) -> 'SystemStatus':
@@ -185,6 +188,12 @@ class SystemStatus:
                         status.mode = OperatingMode(value)
                     except ValueError:
                         pass
+                elif key == 'LOOP':
+                    status.adc_loop = None if value.upper() == 'OFF' else value
+                elif key == 'OVERDRIVE':
+                    status.adc_overdrive = value == '1'
+                elif key == 'SAT':
+                    status.adc_saturated = value == '1'
 
         return status
 
@@ -683,6 +692,25 @@ class AFMClient:
     def reset_board(self) -> str:
         """Reset electronic board to defaults"""
         return self.send_command("BOARD:RESET")
+
+    def configure_adc_loop(self, excite_ch: int, return_ch: int) -> str:
+        """
+        Configure the ADC input protection loop (BOARD:ADC:LOOP).
+
+        Tells the server which board input the Red Pitaya DAC drives and
+        which one returns the AFM signal into the Red Pitaya. The server
+        then warns on BOARD:GAIN when the predicted signal would saturate
+        the +/-1 V ADC input. The reply may carry a "WARN: ..." suffix.
+
+        Args:
+            excite_ch: Board input fed by the Red Pitaya output (1-4)
+            return_ch: Board input returning into the Red Pitaya ADC (1-4)
+        """
+        return self.send_command(f"BOARD:ADC:LOOP {excite_ch},{return_ch}")
+
+    def disable_adc_loop(self) -> str:
+        """Disable the ADC input protection loop (BOARD:ADC:LOOP OFF)"""
+        return self.send_command("BOARD:ADC:LOOP OFF")
 
     def get_board_status(self) -> str:
         """Get electronic board status as a multi-line text block."""

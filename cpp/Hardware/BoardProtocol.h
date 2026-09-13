@@ -4,6 +4,8 @@
 #include <functional>
 #include <string>
 
+#include "IElectronicBoard.h"
+
 /**
  * @brief Framing and response handling for the LPC1114 electronic board.
  *
@@ -26,6 +28,26 @@ public:
   bool sendCommand(const std::string& command,
                    std::string* response = nullptr,
                    uint32_t timeoutMs = 1000);
+
+  /**
+   * @brief Parse the gain section of the board STATUS text
+   *
+   * The board prints a "Gains:" section with lines of the form
+   * "  IN<n>: x<label>" (label in 1/8, 1/4, 1/2, 1, 2, 4, 8, 16). Parsing is
+   * line based and anchored on that section, so routing lines
+   * ("OUT1 <- IN2") or unrelated text cannot produce false positives.
+   *
+   * @param statusText Multi-line STATUS reply from the board
+   * @param gainsOut Receives parsed gains (only valid channels are written)
+   * @param validOut Set false for every channel, then true for parsed ones
+   * @param numChannels Size of the gainsOut/validOut arrays
+   * @return true when the "Gains:" section was found (channels may still
+   *         be individually invalid)
+   */
+  static bool parseGainStatus(const std::string& statusText,
+                              GainSetting gainsOut[],
+                              bool validOut[],
+                              uint8_t numChannels);
 
   const std::string& getLastError() const;
 

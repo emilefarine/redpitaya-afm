@@ -65,8 +65,10 @@ CommandHandler::CommandHandler(HardwareFactory hardwareFactory,
     , m_signalGen(nullptr)
     , m_fftProcessor(nullptr)
     , m_resonanceAnalyzer(nullptr)
+    , m_lastExcitationAmplitude(1.0f)
 {
   m_status.mode = mode;
+  _resetGainCache();
 }
 
 CommandHandler::~CommandHandler()
@@ -114,6 +116,8 @@ std::string CommandHandler::handleCommand(const ParsedCommand& cmd)
     return _handleBoardMuxDisconnect(cmd);
   case Command::BOARD_GAIN:
     return _handleBoardGain(cmd);
+  case Command::BOARD_ADC_LOOP:
+    return _handleBoardAdcLoop(cmd);
   case Command::BOARD_RESET:
     return _handleBoardReset(cmd);
   case Command::BOARD_STATUS:
@@ -158,6 +162,12 @@ std::string CommandHandler::_handleRst(const ParsedCommand& cmd)
   m_signalGen.reset();
   m_fftProcessor.reset();
   m_resonanceAnalyzer.reset();
+  // The gain cache becomes stale here because *RST does not reset the
+  // physical board. This is safe only because *RST also clears
+  // loopMonitorEnabled, and re-enabling the monitor requires SYSTEM:INIT,
+  // which re-reads the gains from the board. Keep that pairing intact.
+  _resetGainCache();
+  m_lastExcitationAmplitude = 1.0f;
   OperatingMode mode = m_status.mode;
   m_status = SystemStatus();
   m_status.mode = mode;
@@ -196,12 +206,28 @@ std::string CommandHandler::_handleSystStatus(const ParsedCommand& cmd)
 {
   (void)cmd;
 
+  // Recompute the estimate so the reported state can never be stale
+  _updateAdcOverdriveEstimate();
+
   std::ostringstream oss;
   oss << "HW_INIT=" << (m_status.hardwareInitialized ? "1" : "0")
       << " BOARD=" << (m_status.boardConnected ? "1" : "0")
       << " BUSY=" << (m_status.measurementInProgress ? "1" : "0")
       << " DEC=" << m_status.currentDecimation
-      << " MODE=" << operatingModeToString(m_status.mode);
+      << " MODE=" << operatingModeToString(m_status.mode)
+      << " LOOP=";
+  if (m_status.loopMonitorEnabled)
+  {
+    // Report 1-based channel numbers matching board connector labels
+    oss << static_cast<int>(m_status.loopExciteChannel + 1) << ","
+        << static_cast<int>(m_status.loopReturnChannel + 1);
+  }
+  else
+  {
+    oss << "OFF";
+  }
+  oss << " OVERDRIVE=" << (m_status.adcOverdrive ? "1" : "0")
+      << " SAT=" << (m_status.adcSaturated ? "1" : "0");
 
   return buildOkResponse(oss.str());
 }
@@ -247,6 +273,13 @@ std::string CommandHandler::_handleSystInit(const ParsedCommand& cmd)
   double samplingFreq = ServerConfig::ADC_SAMPLE_RATE_HZ / m_status.currentDecimation;
   m_signalGen = std::make_unique<SignalGenerator>(samplingFreq, m_status.currentDecimation);
 
+  // Start the ADC loop estimate from the real board state (the board keeps
+  // its gains across re-initialization; BOARD:RESET restores the x1 defaults)
+  if (m_status.boardConnected)
+  {
+    _refreshGainCacheFromBoard();
+  }
+
   m_status.hardwareInitialized = true;
 
   std::ostringstream oss;
@@ -285,6 +318,9 @@ std::string CommandHandler::_handleSystDeinit(const ParsedCommand& cmd)
   m_signalGen.reset();
   m_status.hardwareInitialized = false;
   m_status.boardConnected = false;
+  m_status.adcOverdrive = false;
+  m_status.adcSaturated = false;
+  m_status.adcSaturationRatio = 0.0f;
 
   return buildOkResponse("Hardware deinitialized");
 }
@@ -394,7 +430,77 @@ std::string CommandHandler::_handleBoardGain(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, m_board->getLastError());
   }
 
-  return buildOkResponse(IElectronicBoard::gainToString(gain));
+  m_channelGains[static_cast<size_t>(channel - 1)] = gain;
+  const std::string warn = _buildOverdriveSuffix();
+  return buildOkResponse(IElectronicBoard::gainToString(gain) + warn);
+}
+
+std::string CommandHandler::_handleBoardAdcLoop(const ParsedCommand& cmd)
+{
+  std::string error;
+  if (!_checkInitialized(error))
+    return error;
+  if (!m_status.boardConnected)
+  {
+    return _boardUnavailableError();
+  }
+
+  // Query: report the current loop configuration
+  if (cmd.args.empty())
+  {
+    if (!cmd.isQuery)
+    {
+      return buildErrorResponse(ResponseStatus::ERR_SYNTAX,
+                                "Usage: BOARD:ADC:LOOP <excite_ch>,<return_ch> | OFF");
+    }
+    if (m_status.loopMonitorEnabled)
+    {
+      // Reply with 1-based channel numbers matching board connector labels
+      return buildOkResponse(std::to_string(m_status.loopExciteChannel + 1) + "," +
+                             std::to_string(m_status.loopReturnChannel + 1));
+    }
+    return buildOkResponse("OFF");
+  }
+
+  // Disable the monitor: BOARD:ADC:LOOP OFF
+  if (cmd.args.size() == 1)
+  {
+    std::string arg0;
+    cmd.getArgString(0, arg0);
+    std::transform(arg0.begin(), arg0.end(), arg0.begin(), ::toupper);
+    if (arg0 == "OFF")
+    {
+      m_status.loopMonitorEnabled = false;
+      m_status.adcOverdrive = false;
+      return buildOkResponse("ADC loop monitor off");
+    }
+    return buildErrorResponse(ResponseStatus::ERR_SYNTAX,
+                              "Usage: BOARD:ADC:LOOP <excite_ch>,<return_ch> | OFF");
+  }
+
+  int excite, ret;
+  if (!cmd.getArgInt(0, excite) || !cmd.getArgInt(1, ret))
+  {
+    return buildErrorResponse(ResponseStatus::ERR_SYNTAX,
+                              "Usage: BOARD:ADC:LOOP <excite_ch>,<return_ch> | OFF");
+  }
+
+  // Accept 1-based channel numbers matching board connector labels (1-4)
+  if (excite < 1 || excite > IElectronicBoard::NUM_CHANNELS || ret < 1 ||
+      ret > IElectronicBoard::NUM_CHANNELS)
+  {
+    return buildErrorResponse(ResponseStatus::ERR_PARAM,
+                              "channels must be 1-" +
+                                  std::to_string(IElectronicBoard::NUM_CHANNELS));
+  }
+
+  m_status.loopExciteChannel = static_cast<uint8_t>(excite - 1);
+  m_status.loopReturnChannel = static_cast<uint8_t>(ret - 1);
+  m_status.loopMonitorEnabled = true;
+
+  std::string response =
+      std::to_string(excite) + "," + std::to_string(ret) + _buildOverdriveSuffix();
+  return buildOkResponse(response);
 }
 
 std::string CommandHandler::_handleBoardReset(const ParsedCommand& cmd)
@@ -414,7 +520,13 @@ std::string CommandHandler::_handleBoardReset(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, m_board->getLastError());
   }
 
-  return buildOkResponse("Board reset complete");
+  // The board firmware sets all gains back to x1 and disconnects the mux
+  for (auto& cachedGain : m_channelGains)
+  {
+    cachedGain = GainSetting::GAIN_1;
+  }
+  const std::string warn = _buildOverdriveSuffix();
+  return buildOkResponse(std::string("Board reset complete") + warn);
 }
 
 std::string CommandHandler::_handleBoardStatus(const ParsedCommand& cmd)
@@ -494,6 +606,13 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_PARAM, "amplitude must be in ]0, 1]");
   }
 
+  // Track the excitation for the ADC overdrive estimate; the estimate is
+  // recomputed lazily by SYSTEM:STATUS because the DATA reply format must
+  // stay unchanged for byte-count based clients.
+  m_lastExcitationAmplitude = amplitude;
+  m_status.adcSaturated = false;
+  m_status.adcSaturationRatio = 0.0f;
+
   uint16_t dec = static_cast<uint16_t>(decimation);
   double centerHz = centerKHz * 1000.0;
   double bandwidthHz = bandwidthKHz * 1000.0;
@@ -550,6 +669,10 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
   {
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to read acquired data");
   }
+
+  SaturationDetector::Report saturation = SaturationDetector::analyze(acquired);
+  m_status.adcSaturated = saturation.saturated;
+  m_status.adcSaturationRatio = saturation.saturatedRatio;
 
   // Compute FFT
   m_fftProcessor->applyWindow(acquired);
@@ -636,6 +759,11 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_PARAM, "amplitude must be in ]0, 1]");
   }
 
+  // Track the excitation for the ADC overdrive estimate (see _handleMeasSinc)
+  m_lastExcitationAmplitude = amplitude;
+  m_status.adcSaturated = false;
+  m_status.adcSaturationRatio = 0.0f;
+
   uint16_t dec = static_cast<uint16_t>(decimation);
   double nyquistKHz = ServerConfig::ADC_SAMPLE_RATE_HZ / (2.0 * dec) / 1000.0;
 
@@ -720,6 +848,14 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
                                 "Failed to read data at " + std::to_string(freqKHz) + " kHz");
     }
 
+    SaturationDetector::Report saturation = SaturationDetector::analyze(acquired);
+    if (saturation.saturated)
+    {
+      m_status.adcSaturated = true;
+    }
+    m_status.adcSaturationRatio =
+        std::max(m_status.adcSaturationRatio, saturation.saturatedRatio);
+
     // Compute amplitude and phase via sin/cos correlation
     double omega = 2.0 * M_PI * freqHz / samplingFreq;
     double sumSin = 0.0;
@@ -799,6 +935,112 @@ bool CommandHandler::_validateDecimation(int decimation, std::string& errorRespo
     return false;
   }
   return true;
+}
+
+bool CommandHandler::_updateAdcOverdriveEstimate()
+{
+  if (!m_status.loopMonitorEnabled || !m_status.boardConnected)
+  {
+    m_status.adcOverdrive = false;
+    return false;
+  }
+
+  const size_t excite = m_status.loopExciteChannel;
+  const size_t ret = m_status.loopReturnChannel;
+  if (excite >= IElectronicBoard::NUM_CHANNELS || ret >= IElectronicBoard::NUM_CHANNELS)
+  {
+    m_status.adcOverdrive = false;
+    return false;
+  }
+
+  const float peak = InputSafety::estimateAdcPeak(
+      m_lastExcitationAmplitude, m_channelGains[excite], m_channelGains[ret]);
+  m_status.adcOverdrive = peak > InputSafety::ADC_FULL_SCALE;
+  return m_status.adcOverdrive;
+}
+
+std::string CommandHandler::_buildOverdriveSuffix()
+{
+  if (!_updateAdcOverdriveEstimate())
+  {
+    return "";
+  }
+
+  const size_t excite = m_status.loopExciteChannel;
+  const size_t ret = m_status.loopReturnChannel;
+  const GainSetting exciteGain = m_channelGains[excite];
+  const GainSetting returnGain = m_channelGains[ret];
+  const float peak = InputSafety::estimateAdcPeak(m_lastExcitationAmplitude, exciteGain,
+                                                  returnGain);
+
+  std::ostringstream oss;
+  oss << " WARN: expected ADC peak ~" << std::fixed << std::setprecision(2) << peak
+      << " V exceeds " << InputSafety::ADC_FULL_SCALE << " V full scale";
+
+  GainSetting safeGain = GainSetting::GAIN_1;
+  if (InputSafety::maxSafeReturnGain(m_lastExcitationAmplitude, exciteGain, safeGain))
+  {
+    oss << "; suggested: BOARD:GAIN " << static_cast<int>(ret + 1) << ","
+        << static_cast<int>(IElectronicBoard::gainToIndex(safeGain));
+  }
+  else
+  {
+    const float maxAmplitude =
+        InputSafety::ADC_FULL_SCALE /
+        (IElectronicBoard::gainFactor(exciteGain) * IElectronicBoard::gainFactor(returnGain));
+
+    GainSetting safeExcite = GainSetting::GAIN_1;
+    if (InputSafety::maxSafeExciteGain(m_lastExcitationAmplitude, returnGain, safeExcite))
+    {
+      oss << "; suggested: BOARD:GAIN " << static_cast<int>(excite + 1) << ","
+          << static_cast<int>(IElectronicBoard::gainToIndex(safeExcite))
+          << " or excitation amplitude <= " << maxAmplitude;
+    }
+    else
+    {
+      oss << "; reduce excitation amplitude to <= " << maxAmplitude;
+    }
+  }
+  return oss.str();
+}
+
+void CommandHandler::_refreshGainCacheFromBoard()
+{
+  // Seed with the most conservative gain: unknown board state must never
+  // silently weaken the overdrive estimate (fail-safe default)
+  for (auto& cachedGain : m_channelGains)
+  {
+    cachedGain = GainSetting::GAIN_16;
+  }
+
+  if (!m_board)
+  {
+    return;
+  }
+
+  std::array<GainSetting, IElectronicBoard::NUM_CHANNELS> gains;
+  std::array<bool, IElectronicBoard::NUM_CHANNELS> valid;
+  // Value-initialize before the call: mocks (and gtest argument printing)
+  // may observe the buffers even when the query fails
+  gains.fill(GainSetting::GAIN_1);
+  valid.fill(false);
+  if (!m_board->queryGains(gains, valid))
+  {
+    return; // keep the conservative x16 seed on transport failure
+  }
+
+  for (size_t i = 0; i < IElectronicBoard::NUM_CHANNELS; ++i)
+  {
+    m_channelGains[i] = valid[i] ? gains[i] : GainSetting::GAIN_16;
+  }
+}
+
+void CommandHandler::_resetGainCache()
+{
+  for (auto& cachedGain : m_channelGains)
+  {
+    cachedGain = GainSetting::GAIN_1;
+  }
 }
 
 bool CommandHandler::_waitForMeasurement()

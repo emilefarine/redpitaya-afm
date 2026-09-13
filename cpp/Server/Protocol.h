@@ -43,6 +43,28 @@ struct ServerConfig
  * X(enum_name, scpi_keyword), maps an enum value to its SCPI wire-format
  * keyword.  The parser strips a trailing '?' (marking a query) before
  * matching; the isQuery flag in ParsedCommand distinguishes set from query.
+ *
+ * ADC input protection (BOARD:ADC:LOOP):
+ *   The board boosts the Red Pitaya output before it reaches the AFM and the
+ *   response returns through a board input channel into the +/-1 V ADC range.
+ *   BOARD:ADC:LOOP <excite_ch>,<return_ch> tells the server which channels
+ *   form that loop. It then tracks the last excitation amplitude and the
+ *   gains of both channels, warns on BOARD:GAIN when the predicted peak
+ *   would saturate the ADC ("OK <gain> WARN: ...", commands are never
+ *   rejected), and reports state via SYSTEM:STATUS fields LOOP, OVERDRIVE
+ *   and SAT. MEASURE replies keep their "OK DATA <N> <BYTES>" format, so
+ *   overdrive/saturation results are only visible in SYSTEM:STATUS.
+ *
+ *   Scope and assumptions of the monitor:
+ *   - It assumes the +/-1 V (LV) jumper position on the Red Pitaya inputs;
+ *     with the HV jumper the estimates and SAT are invalid.
+ *   - It tracks the two configured channels, not the MUX routing. If the
+ *     physical return path is rerouted, re-issue BOARD:ADC:LOOP.
+ *   - The estimate is a worst case upper bound (AFM transmitting the full
+ *     excitation back); SaturationDetector (SAT) reports actual clipping.
+ *     A MEASURE:SWEEP always completes; saturated points only raise SAT.
+ *   - Unknown board gain state degrades to the x16 assumption, so a failing
+ *     gain query produces warnings instead of silence.
  */
 #define AFM_COMMAND_LIST \
     X(IDN,                  "*IDN")                   /* IEEE 488.2: Identify */ \
@@ -58,6 +80,7 @@ struct ServerConfig
     X(BOARD_MUX_ROUTE,      "BOARD:MUX:ROUTE")        /* Route input to output */ \
     X(BOARD_MUX_DISCONNECT, "BOARD:MUX:DISCONNECT")   /* Disconnect MUX output */ \
     X(BOARD_GAIN,           "BOARD:GAIN")             /* Set channel gain */ \
+    X(BOARD_ADC_LOOP,       "BOARD:ADC:LOOP")         /* Configure ADC return-path overdrive monitor */ \
     X(BOARD_RESET,          "BOARD:RESET")            /* Reset electronic board */ \
     X(BOARD_STATUS,         "BOARD:STATUS")           /* Get electronic board status */ \
     X(MEAS_SINC,            "MEASURE:SINC")           /* Broadband sinc measurement + FFT */ \
@@ -371,7 +394,7 @@ inline std::string buildSpectrumResponse(const std::vector<SpectrumPoint>& spect
 struct VersionInfo
 {
   static constexpr int MAJOR = 2;
-  static constexpr int MINOR = 4;
+  static constexpr int MINOR = 5;
   static constexpr int PATCH = 0;
 
   static std::string toString()

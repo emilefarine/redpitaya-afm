@@ -61,6 +61,22 @@ TEST(ProtocolTest, ParseLineDetectsQuerySuffix)
   EXPECT_FALSE(set.isQuery);
 }
 
+TEST(ProtocolTest, ParseLineAdcLoopCommand)
+{
+  auto cmd = parseLine("BOARD:ADC:LOOP 1,3");
+  EXPECT_EQ(cmd.command, Command::BOARD_ADC_LOOP);
+  EXPECT_FALSE(cmd.isQuery);
+  ASSERT_EQ(cmd.args.size(), 2u);
+  EXPECT_EQ(cmd.args[0], "1");
+  EXPECT_EQ(cmd.args[1], "3");
+
+  EXPECT_EQ(parseLine("board:adc:loop off").command, Command::BOARD_ADC_LOOP);
+
+  auto query = parseLine("BOARD:ADC:LOOP?");
+  EXPECT_EQ(query.command, Command::BOARD_ADC_LOOP);
+  EXPECT_TRUE(query.isQuery);
+}
+
 TEST(ProtocolTest, OperatingModeToString)
 {
   EXPECT_STREQ(operatingModeToString(OperatingMode::FULL), "FULL");
@@ -317,5 +333,5 @@ TEST(ProtocolTest, ServerConfigConstants)
 
 TEST(ProtocolTest, VersionInfoToString)
 {
-  EXPECT_EQ(VersionInfo::toString(), "2.4.0");
+  EXPECT_EQ(VersionInfo::toString(), "2.5.0");
 }

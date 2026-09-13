@@ -408,6 +408,26 @@ class SystemStatusTests(unittest.TestCase):
             "HW_INIT=1 BOARD=0 BUSY=0 DEC=64 MODE=RP_ONLY")
         self.assertEqual(status.mode, OperatingMode.RP_ONLY)
 
+    def test_adc_safety_fields_are_parsed(self):
+        status = SystemStatus.from_response(
+            "HW_INIT=1 BOARD=1 BUSY=0 DEC=64 MODE=FULL LOOP=1,3 OVERDRIVE=1 SAT=0")
+        self.assertEqual(status.adc_loop, "1,3")
+        self.assertTrue(status.adc_overdrive)
+        self.assertFalse(status.adc_saturated)
+
+    def test_adc_loop_off_has_no_channel_pair(self):
+        status = SystemStatus.from_response(
+            "HW_INIT=1 BOARD=1 BUSY=0 DEC=64 MODE=FULL LOOP=OFF OVERDRIVE=0 SAT=1")
+        self.assertIsNone(status.adc_loop)
+        self.assertFalse(status.adc_overdrive)
+        self.assertTrue(status.adc_saturated)
+
+    def test_adc_safety_fields_default_off(self):
+        status = SystemStatus.from_response("HW_INIT=1 DEC=64")
+        self.assertIsNone(status.adc_loop)
+        self.assertFalse(status.adc_overdrive)
+        self.assertFalse(status.adc_saturated)
+
 
 class OperatingModeTests(ClientTestCase):
     def test_get_mode_rp_only(self):
