@@ -147,20 +147,136 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIn("expected ADC peak", message)
         self.assertNotIn("WARN:", message)
 
-    def test_refresh_clears_stale_warnings(self):
-        def respond(command, handler):
-            return "OK HW_INIT=0 BOARD=0 BUSY=0 DEC=64\n"
-
+    def connect_window(self, respond):
         server = self.make_server(respond)
         client = AFMClient("127.0.0.1", server.port, timeout=2.0)
         client.connect()
         self.addCleanup(client.disconnect)
         self.window.client = client
         self.window._update_connection_ui(True)
+        return client
 
-        self.window.statusBar().showMessage("old warning")
+    def test_refresh_keeps_status_bar_message(self):
+        self.connect_window(
+            lambda command, handler: "OK HW_INIT=0 BOARD=0 BUSY=0 DEC=64\n")
+
+        # The refresh after connect / init / measure must not erase their message
+        self.window.statusBar().showMessage("Measurement complete - 32 points in 1.23s")
         self.window._on_refresh_status()
-        self.assertEqual(self.window.statusBar().currentMessage(), "")
+        self.assertEqual(self.window.statusBar().currentMessage(),
+                         "Measurement complete - 32 points in 1.23s")
+
+    def test_adc_indicator_reports_ok_when_monitored(self):
+        self.connect_window(lambda command, handler: (
+            "OK HW_INIT=1 BOARD=1 BUSY=0 DEC=64 MODE=FULL LOOP=1,3 "
+            "OVERDRIVE=0 SAT=0 PROTECT=1\n"))
+
+        self.window._on_refresh_status()
+        self.assertEqual(self.window.adc_status_label.text(), "OK")
+        self.assertIn("1,3", self.window.adc_status_label.toolTip())
+        self.assertTrue(self.window.adc_protect_check.isChecked())
+
+    def test_adc_indicator_shows_overdrive_saturation_and_override(self):
+        self.connect_window(lambda command, handler: (
+            "OK HW_INIT=1 BOARD=1 BUSY=0 DEC=64 MODE=FULL LOOP=1,3 "
+            "OVERDRIVE=1 SAT=1 PROTECT=0\n"))
+
+        self.window._on_refresh_status()
+        text = self.window.adc_status_label.text()
+        self.assertIn("SATURATED", text)
+        self.assertIn("overdrive risk", text)
+        self.assertIn("protection OFF", text)
+        # The checkbox follows the server state
+        self.assertFalse(self.window.adc_protect_check.isChecked())
+
+    def test_adc_indicator_for_legacy_server(self):
+        self.connect_window(
+            lambda command, handler: "OK HW_INIT=1 BOARD=1 BUSY=0 DEC=64\n")
+
+        self.window._on_refresh_status()
+        self.assertEqual(self.window.adc_status_label.text(), "not monitored")
+        self.assertTrue(self.window.adc_protect_check.isChecked())
+
+    def test_adc_indicator_resets_when_disconnected(self):
+        self.connect_window(lambda command, handler: (
+            "OK HW_INIT=1 BOARD=1 BUSY=0 DEC=64 MODE=FULL LOOP=1,3 "
+            "OVERDRIVE=1 SAT=0 PROTECT=1\n"))
+        self.window._on_refresh_status()
+        self.assertIn("overdrive risk", self.window.adc_status_label.text())
+
+        self.window._update_connection_ui(False)
+        self.assertEqual(self.window.adc_status_label.text(), "N/A")
+
+    def test_adc_protect_override_needs_confirmation(self):
+        from unittest import mock
+
+        commands = []
+
+        def respond(command, handler):
+            commands.append(command)
+            if command.startswith("SYSTEM:STATUS"):
+                protect = 0 if "BOARD:ADC:PROTECT OFF" in commands else 1
+                return ("OK HW_INIT=1 BOARD=1 BUSY=0 DEC=64 MODE=FULL LOOP=1,X "
+                        f"OVERDRIVE=0 SAT=0 PROTECT={protect}\n")
+            return "OK OFF\n" if command.endswith("OFF") else "OK ON\n"
+
+        self.connect_window(respond)
+        self.window._on_refresh_status()
+
+        with mock.patch("afm_gui.QMessageBox") as box:
+            # Declined: nothing sent, box ticked again
+            box.question.return_value = box.StandardButton.No
+            self.window.adc_protect_check.setChecked(False)
+            self.assertTrue(self.window.adc_protect_check.isChecked())
+            self.assertNotIn("BOARD:ADC:PROTECT OFF", commands)
+
+            # Confirmed: override sent and shown
+            box.question.return_value = box.StandardButton.Yes
+            self.window.adc_protect_check.setChecked(False)
+            self.assertIn("BOARD:ADC:PROTECT OFF", commands)
+            self.assertFalse(self.window.adc_protect_check.isChecked())
+            self.assertIn("protection OFF", self.window.adc_status_label.text())
+
+    def test_sample_gain_follows_status_and_is_sent_when_edited(self):
+        commands = []
+
+        def respond(command, handler):
+            commands.append(command)
+            if command.startswith("SYSTEM:STATUS"):
+                gain = "0.1" if "BOARD:ADC:SAMPLEGAIN 0.1" in commands else "0.01"
+                return ("OK HW_INIT=1 BOARD=1 BUSY=0 DEC=64 MODE=FULL LOOP=1,3 "
+                        f"OVERDRIVE=0 SAT=0 PROTECT=1 SAMPLEGAIN={gain}\n")
+            return "OK 0.1\n"
+
+        self.connect_window(respond)
+        self.window._on_refresh_status()
+        self.assertAlmostEqual(self.window.sample_gain_spin.value(), 0.01)
+        self.assertIn("Sample gain: 0.01", self.window.adc_status_label.toolTip())
+
+        # Unchanged value: nothing sent
+        self.window.sample_gain_spin.editingFinished.emit()
+        self.assertFalse(any("SAMPLEGAIN" in c for c in commands))
+
+        self.window.sample_gain_spin.setValue(0.1)
+        self.window.sample_gain_spin.editingFinished.emit()
+        self.assertIn("BOARD:ADC:SAMPLEGAIN 0.1", commands)
+        self.assertAlmostEqual(self.window.sample_gain_spin.value(), 0.1)
+
+    def test_refused_measurement_shows_overdrive_dialog(self):
+        from unittest import mock
+
+        self.connect_window(lambda command, handler: "OK\n")
+
+        with mock.patch("afm_gui.QMessageBox") as box:
+            self.window._on_measure_error(
+                "ERR_PARAM: ADC overdrive: expected ADC peak ~2.00 V exceeds 1.00 V "
+                "full scale; suggested: BOARD:GAIN 3,2; BOARD:ADC:PROTECT OFF overrides")
+            box.warning.assert_called_once()
+            box.critical.assert_not_called()
+            self.assertIn("suggested: BOARD:GAIN 3,2", box.warning.call_args[0][2])
+        self.assertEqual(self.window.statusBar().currentMessage(),
+                         "Measurement refused: ADC overdrive")
+        self.assertTrue(self.window.measure_btn.isEnabled())
 
     def test_status_timeout_goes_offline(self):
         started = threading.Event()

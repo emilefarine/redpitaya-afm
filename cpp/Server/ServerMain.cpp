@@ -136,10 +136,12 @@ void printUsage(const char* programName)
             << "\n"
             << "SCPI Commands:\n"
             << "  IEEE 488.2: *IDN?, *RST, *OPC?\n"
-            << "  System:     SYSTEM:PING, SYSTEM:VERSION, SYSTEM:STATUS,\n"
+            << "  System:     SYSTEM:PING, SYSTEM:VERSION, SYSTEM:STATUS, SYSTEM:MODE,\n"
             << "              SYSTEM:INIT, SYSTEM:DEINIT, SYSTEM:SHUTDOWN\n"
             << "  Board:      BOARD:MUX:ROUTE, BOARD:MUX:DISCONNECT,\n"
-            << "              BOARD:GAIN, BOARD:RESET, BOARD:STATUS\n"
+            << "              BOARD:GAIN, BOARD:RESET, BOARD:STATUS,\n"
+            << "              BOARD:ADC:LOOP, BOARD:ADC:PROTECT,\n"
+            << "              BOARD:ADC:SAMPLEGAIN\n"
             << "  Measure:    MEASURE:SINC, MEASURE:SWEEP\n"
             << std::endl;
 }

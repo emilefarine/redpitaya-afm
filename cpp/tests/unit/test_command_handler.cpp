@@ -94,9 +94,25 @@ protected:
           valid.fill(true);
           return true;
         }));
+    // Default board state: outputs disconnected
+    ON_CALL(*m_rawBoard, queryRouting(_, _))
+        .WillByDefault(Invoke([](std::array<uint8_t, 4>& routing,
+                                 std::array<bool, 4>& valid) {
+          routing.fill(IElectronicBoard::DISCONNECTED);
+          valid.fill(true);
+          return true;
+        }));
 
     std::string resp = send("SYSTEM:INIT");
     EXPECT_EQ(resp.compare(0, 2, "OK"), 0) << resp;
+  }
+
+  void allowBoardCommands()
+  {
+    ON_CALL(*m_rawBoard, setMuxRoute(_, _)).WillByDefault(Return(true));
+    ON_CALL(*m_rawBoard, disconnectMux(_)).WillByDefault(Return(true));
+    ON_CALL(*m_rawBoard, setGain(_, _)).WillByDefault(Return(true));
+    ON_CALL(*m_rawBoard, reset()).WillByDefault(Return(true));
   }
 
   void primeSuccessfulMeasurement(uint32_t numSamples)
@@ -902,7 +918,7 @@ TEST_F(CommandHandlerTest, AdcLoopConfigureQueryAndStatus)
 {
   initHardware(true);
 
-  EXPECT_EQ(send("BOARD:ADC:LOOP?"), "OK OFF\n");
+  EXPECT_EQ(send("BOARD:ADC:LOOP?"), "OK AUTO\n");
   EXPECT_EQ(send("BOARD:ADC:LOOP 1,3"), "OK 1,3\n");
   EXPECT_EQ(send("BOARD:ADC:LOOP?"), "OK 1,3\n");
 
@@ -980,6 +996,8 @@ TEST_F(CommandHandlerTest, MeasSincUpdatesOverdriveFromAmplitude)
   EXPECT_EQ(resp.compare(0, 3, "OK "), 0) << resp;
   EXPECT_NE(send("SYSTEM:STATUS?").find("OVERDRIVE=0"), std::string::npos);
 
+  // With the override the full amplitude runs
+  EXPECT_EQ(send("BOARD:ADC:PROTECT OFF"), "OK OFF\n");
   resp = send("MEASURE:SINC 200,100,1024,64,1");
   EXPECT_EQ(resp.compare(0, 3, "OK "), 0) << resp;
   EXPECT_NE(send("SYSTEM:STATUS?").find("OVERDRIVE=1"), std::string::npos);
@@ -1094,7 +1112,7 @@ TEST_F(CommandHandlerTest, InitGainQueryFailureFailsSafe)
 
   std::string resp = send("BOARD:ADC:LOOP 1,3");
   EXPECT_NE(resp.find("WARN"), std::string::npos);
-  EXPECT_NE(resp.find("168.00"), std::string::npos); // 10.5 V rail x 16
+  EXPECT_NE(resp.find("10.50"), std::string::npos); // both stages clip at the board rail
   EXPECT_NE(send("SYSTEM:STATUS?").find("OVERDRIVE=1"), std::string::npos);
 }
 
@@ -1164,7 +1182,7 @@ TEST_F(CommandHandlerTest, AdcLoopBareFormIsSyntaxError)
 {
   initHardware(true);
   EXPECT_NE(send("BOARD:ADC:LOOP").find("ERR_SYNTAX"), std::string::npos);
-  EXPECT_EQ(send("BOARD:ADC:LOOP?"), "OK OFF\n");
+  EXPECT_EQ(send("BOARD:ADC:LOOP?"), "OK AUTO\n");
 }
 
 TEST_F(CommandHandlerTest, RstClearsLoopConfiguration)
@@ -1186,6 +1204,459 @@ TEST_F(CommandHandlerTest, GainWithoutLoopMonitorStaysUnchanged)
   EXPECT_CALL(*m_rawBoard, setGain(0, GainSetting::GAIN_16)).WillOnce(Return(true));
   EXPECT_EQ(send("BOARD:GAIN 1,7"), "OK 16\n");
   EXPECT_EQ(send("SYSTEM:STATUS?").find("OVERDRIVE=1"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, AdcMonitorIsOnByDefaultAndFollowsRouting)
+{
+  initHardware(true);
+  allowBoardCommands();
+
+  EXPECT_EQ(send("BOARD:ADC:LOOP?"), "OK AUTO\n");
+  EXPECT_EQ(send("BOARD:ADC:PROTECT?"), "OK ON\n");
+
+  // Nothing routed to OUT1: no signal reaches the ADC
+  std::string status = send("SYSTEM:STATUS?");
+  EXPECT_NE(status.find("LOOP=1,X"), std::string::npos) << status;
+  EXPECT_NE(status.find("OVERDRIVE=0"), std::string::npos);
+  EXPECT_NE(status.find("PROTECT=1"), std::string::npos);
+
+  // OUT1 <- IN3 makes IN3 the return channel
+  EXPECT_EQ(send("BOARD:MUX:ROUTE 1,3"), "OK\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("LOOP=1,3"), std::string::npos);
+
+  // Other outputs do not change the loop
+  EXPECT_EQ(send("BOARD:MUX:ROUTE 3,1"), "OK\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("LOOP=1,3"), std::string::npos);
+
+  EXPECT_EQ(send("BOARD:MUX:DISCONNECT 1"), "OK\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("LOOP=1,X"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, AutoLoopWarnsOnGainWithoutLoopCommand)
+{
+  initHardware(true);
+  allowBoardCommands();
+  EXPECT_EQ(send("BOARD:MUX:ROUTE 1,3"), "OK\n");
+
+  // Return x2 at the default amplitude 1.0
+  std::string resp = send("BOARD:GAIN 3,4");
+  EXPECT_EQ(resp.compare(0, 5, "OK 2 "), 0) << resp;
+  EXPECT_NE(resp.find("WARN: expected ADC peak ~2.00 V"), std::string::npos);
+  EXPECT_NE(resp.find("suggested: BOARD:GAIN 3,3"), std::string::npos);
+  EXPECT_NE(send("SYSTEM:STATUS?").find("OVERDRIVE=1"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, MuxRouteReplyCarriesOverdriveWarning)
+{
+  initHardware(true);
+  allowBoardCommands();
+
+  // Harmless while nothing is routed to the ADC
+  EXPECT_EQ(send("BOARD:GAIN 3,5"), "OK 4\n");
+
+  std::string resp = send("BOARD:MUX:ROUTE 1,3");
+  EXPECT_EQ(resp.compare(0, 9, "OK WARN: "), 0) << resp;
+  EXPECT_NE(resp.find("~4.00 V"), std::string::npos);
+
+  // Opening the return path clears it
+  EXPECT_EQ(send("BOARD:MUX:DISCONNECT 1"), "OK\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("OVERDRIVE=0"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, MeasSincRefusedWhenPredictedPeakExceedsFullScale)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(1024);
+  allowBoardCommands();
+  EXPECT_EQ(send("BOARD:MUX:ROUTE 1,3"), "OK\n");
+  EXPECT_EQ(send("BOARD:GAIN 1,4").compare(0, 5, "OK 2 "), 0);
+
+  // A refused measurement never reaches the hardware
+  EXPECT_CALL(*m_rawHw, setDecimation(_)).Times(0);
+  EXPECT_CALL(*m_rawHw, loadGenerationSignal(_)).Times(0);
+  EXPECT_CALL(*m_rawHw, startMeasurement(_, _)).Times(0);
+
+  std::string resp = send("MEASURE:SINC 200,100,1024,64,1");
+  EXPECT_EQ(resp.compare(0, 24, "ERR_PARAM: ADC overdrive"), 0) << resp;
+  EXPECT_NE(resp.find("~2.00 V"), std::string::npos);
+  EXPECT_NE(resp.find("suggested: BOARD:GAIN 3,2"), std::string::npos);
+  EXPECT_NE(resp.find("BOARD:ADC:PROTECT OFF overrides"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, MeasSincRunsWhenAmplitudeKeepsPeakInRange)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(1024);
+  allowBoardCommands();
+  EXPECT_EQ(send("BOARD:MUX:ROUTE 1,3"), "OK\n");
+  EXPECT_EQ(send("BOARD:GAIN 1,4").compare(0, 5, "OK 2 "), 0);
+
+  // 0.5 x 2 = full scale exactly: allowed
+  std::string resp = send("MEASURE:SINC 200,100,1024,64,0.5");
+  EXPECT_EQ(resp.compare(0, 3, "OK "), 0) << resp;
+  EXPECT_NE(send("SYSTEM:STATUS?").find("OVERDRIVE=0"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, SweepRefusedWhenPredictedPeakExceedsFullScale)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+  allowBoardCommands();
+  EXPECT_EQ(send("BOARD:MUX:ROUTE 1,3"), "OK\n");
+  EXPECT_EQ(send("BOARD:GAIN 3,6").compare(0, 5, "OK 8 "), 0);
+
+  EXPECT_CALL(*m_rawHw, setDecimation(_)).Times(0);
+  EXPECT_CALL(*m_rawHw, loadGenerationSignal(_)).Times(0);
+
+  std::string resp = send("MEASURE:SWEEP 200,2,1,64,0.5");
+  EXPECT_EQ(resp.compare(0, 24, "ERR_PARAM: ADC overdrive"), 0) << resp;
+  EXPECT_NE(resp.find("~4.00 V"), std::string::npos);
+  EXPECT_FALSE(m_handler->getStatus().measurementInProgress);
+}
+
+TEST_F(CommandHandlerTest, ProtectOffAllowsOverdrivingMeasurementAndReportsIt)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(1024);
+  allowBoardCommands();
+  EXPECT_EQ(send("BOARD:MUX:ROUTE 1,3"), "OK\n");
+  EXPECT_EQ(send("BOARD:GAIN 1,4").compare(0, 5, "OK 2 "), 0);
+
+  // The override reply carries the warning
+  std::string resp = send("BOARD:ADC:PROTECT OFF");
+  EXPECT_EQ(resp.compare(0, 7, "OK OFF "), 0) << resp;
+  EXPECT_NE(resp.find("WARN"), std::string::npos);
+  EXPECT_EQ(send("BOARD:ADC:PROTECT?"), "OK OFF\n");
+
+  resp = send("MEASURE:SINC 200,100,1024,64,1");
+  EXPECT_EQ(resp.compare(0, 3, "OK "), 0) << resp;
+  std::string status = send("SYSTEM:STATUS?");
+  EXPECT_NE(status.find("OVERDRIVE=1"), std::string::npos);
+  EXPECT_NE(status.find("PROTECT=0"), std::string::npos);
+
+  // Re-armed: refused again
+  EXPECT_EQ(send("BOARD:ADC:PROTECT ON").compare(0, 5, "OK ON"), 0);
+  EXPECT_NE(send("MEASURE:SINC 200,100,1024,64,1").find("ADC overdrive"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, AdcProtectRejectsInvalidArguments)
+{
+  initHardware(true);
+
+  EXPECT_NE(send("BOARD:ADC:PROTECT").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("BOARD:ADC:PROTECT MAYBE").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("BOARD:ADC:PROTECT ON,OFF").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_EQ(send("BOARD:ADC:PROTECT off"), "OK OFF\n");
+  EXPECT_EQ(send("BOARD:ADC:PROTECT on"), "OK ON\n");
+}
+
+TEST_F(CommandHandlerTest, AdcProtectRequiresBoardAndIsRearmedByRst)
+{
+  EXPECT_NE(send("BOARD:ADC:PROTECT OFF").find("ERR_NOT_INIT"), std::string::npos);
+
+  initHardware(true);
+  EXPECT_EQ(send("BOARD:ADC:PROTECT OFF"), "OK OFF\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("PROTECT=0"), std::string::npos);
+
+  EXPECT_EQ(send("*RST"), "OK\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("PROTECT=1"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, RpOnlyModeHasNoAdcMonitor)
+{
+  createHandler(AFM::OperatingMode::RP_ONLY);
+  ON_CALL(*m_rawHw, initialize()).WillByDefault(Return(true));
+  ON_CALL(*m_rawHw, getDecimation()).WillByDefault(Return(64));
+  ASSERT_EQ(send("SYSTEM:INIT").compare(0, 2, "OK"), 0);
+  primeSuccessfulMeasurement(1024);
+
+  EXPECT_NE(send("BOARD:ADC:PROTECT?").find("RP-only mode"), std::string::npos);
+  EXPECT_EQ(send("MEASURE:SINC 200,100,1024,64,1").compare(0, 3, "OK "), 0);
+  EXPECT_NE(send("SYSTEM:STATUS?").find("LOOP=OFF"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, AutoLoopDirectRouteCountsOneGainStage)
+{
+  initHardware(true);
+  allowBoardCommands();
+
+  // IN1 straight to the ADC: its gain applies once
+  EXPECT_EQ(send("BOARD:MUX:ROUTE 1,1"), "OK\n");
+  std::string resp = send("BOARD:GAIN 1,4");
+  EXPECT_NE(resp.find("~2.00 V"), std::string::npos) << resp;
+  EXPECT_NE(resp.find("suggested: BOARD:GAIN 1,3 or excitation amplitude <= 0.5000"),
+            std::string::npos);
+  EXPECT_NE(send("SYSTEM:STATUS?").find("LOOP=1,1"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, ManualLoopOnOneChannelCountsOneGainStage)
+{
+  initHardware(true);
+  allowBoardCommands();
+  EXPECT_EQ(send("BOARD:ADC:LOOP 1,1"), "OK 1,1\n");
+
+  std::string resp = send("BOARD:GAIN 1,7");
+  EXPECT_NE(resp.find("~10.50 V"), std::string::npos) << resp;
+  EXPECT_NE(resp.find("excitation amplitude <= 0.0625"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, OverdriveAdviceNeverSuggestsZeroAmplitude)
+{
+  initHardware(true);
+  allowBoardCommands();
+  EXPECT_EQ(send("BOARD:ADC:LOOP 1,2"), "OK 1,2\n");
+  EXPECT_NE(send("BOARD:GAIN 1,7").find("WARN"), std::string::npos);
+
+  // x16 into x16: peak capped at the rail, advised amplitude non-zero
+  std::string resp = send("BOARD:GAIN 2,7");
+  EXPECT_NE(resp.find("~10.50 V"), std::string::npos) << resp;
+  EXPECT_NE(resp.find("reduce excitation amplitude to <= 0.0039"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, AdcLoopAutoRestoresRoutingDerivedLoop)
+{
+  initHardware(true);
+  allowBoardCommands();
+
+  EXPECT_EQ(send("BOARD:ADC:LOOP 2,4"), "OK 2,4\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("LOOP=2,4"), std::string::npos);
+
+  EXPECT_EQ(send("BOARD:ADC:LOOP auto"), "OK AUTO\n");
+  EXPECT_EQ(send("BOARD:ADC:LOOP?"), "OK AUTO\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("LOOP=1,X"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, InitReadsRoutingFromBoard)
+{
+  ON_CALL(*m_rawHw, initialize()).WillByDefault(Return(true));
+  ON_CALL(*m_rawHw, getDecimation()).WillByDefault(Return(64));
+  ON_CALL(*m_rawBoard, initialize()).WillByDefault(Return(true));
+  ON_CALL(*m_rawBoard, queryGains(_, _))
+      .WillByDefault(Invoke([](std::array<GainSetting, 4>& gains,
+                               std::array<bool, 4>& valid) {
+        gains.fill(GainSetting::GAIN_1);
+        valid.fill(true);
+        gains[1] = GainSetting::GAIN_4; // IN2 x4
+        return true;
+      }));
+  ON_CALL(*m_rawBoard, queryRouting(_, _))
+      .WillByDefault(Invoke([](std::array<uint8_t, 4>& routing,
+                               std::array<bool, 4>& valid) {
+        routing.fill(IElectronicBoard::DISCONNECTED);
+        valid.fill(true);
+        routing[0] = 1; // OUT1 <- IN2
+        return true;
+      }));
+
+  ASSERT_EQ(send("SYSTEM:INIT").compare(0, 2, "OK"), 0);
+
+  std::string status = send("SYSTEM:STATUS?");
+  EXPECT_NE(status.find("LOOP=1,2"), std::string::npos) << status;
+  EXPECT_NE(status.find("OVERDRIVE=1"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, UnknownRoutingAssumesWorstCaseReturnChannel)
+{
+  ON_CALL(*m_rawHw, initialize()).WillByDefault(Return(true));
+  ON_CALL(*m_rawHw, getDecimation()).WillByDefault(Return(64));
+  ON_CALL(*m_rawBoard, initialize()).WillByDefault(Return(true));
+  ON_CALL(*m_rawBoard, queryGains(_, _))
+      .WillByDefault(Invoke([](std::array<GainSetting, 4>& gains,
+                               std::array<bool, 4>& valid) {
+        gains.fill(GainSetting::GAIN_1);
+        valid.fill(true);
+        gains[3] = GainSetting::GAIN_4; // IN4 x4
+        return true;
+      }));
+  // Unreadable routing must not count as open
+  ON_CALL(*m_rawBoard, queryRouting(_, _)).WillByDefault(Return(false));
+
+  ASSERT_EQ(send("SYSTEM:INIT").compare(0, 2, "OK"), 0);
+  primeSuccessfulMeasurement(1024);
+
+  std::string status = send("SYSTEM:STATUS?");
+  EXPECT_NE(status.find("LOOP=1,?"), std::string::npos) << status;
+  EXPECT_NE(status.find("OVERDRIVE=1"), std::string::npos);
+
+  std::string resp = send("MEASURE:SINC 200,100,1024,64,1");
+  EXPECT_NE(resp.find("ADC overdrive"), std::string::npos) << resp;
+  EXPECT_NE(resp.find("~4.00 V"), std::string::npos);
+  EXPECT_NE(resp.find("board routing unknown, worst case assumed"), std::string::npos);
+
+  // A status reply resolves it
+  EXPECT_CALL(*m_rawBoard, getStatus(_))
+      .WillOnce(Invoke([](std::string& out) {
+        out = "Routing:\n  OUT1 <- X (disconnected)\n  OUT2 <- X (disconnected)\n"
+              "Gains:\n  IN1: x1\n  IN2: x1\n  IN3: x1\n  IN4: x4\n==================";
+        return true;
+      }));
+  EXPECT_EQ(send("BOARD:STATUS?").compare(0, 3, "OK "), 0);
+  status = send("SYSTEM:STATUS?");
+  EXPECT_NE(status.find("LOOP=1,X"), std::string::npos) << status;
+  EXPECT_NE(status.find("OVERDRIVE=0"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, BoardStatusReplyResynchronizesGainAndRoutingCache)
+{
+  initHardware(true);
+  EXPECT_NE(send("SYSTEM:STATUS?").find("LOOP=1,X"), std::string::npos);
+
+  // The board changed without the server knowing
+  EXPECT_CALL(*m_rawBoard, getStatus(_))
+      .WillOnce(Invoke([](std::string& out) {
+        out = "> STATUS\n=== MUX Status ===\nRouting:\n  OUT1 <- IN3\n"
+              "  OUT2 <- X (disconnected)\n  OUT3 <- IN1\n  OUT4 <- X (disconnected)\n"
+              "Gains:\n  IN1: x1\n  IN2: x1\n  IN3: x8\n  IN4: x1\n==================";
+        return true;
+      }))
+      .WillOnce(Invoke([](std::string& out) {
+        out = "something the parser does not understand";
+        return true;
+      }));
+
+  EXPECT_EQ(send("BOARD:STATUS?").compare(0, 3, "OK "), 0);
+  std::string status = send("SYSTEM:STATUS?");
+  EXPECT_NE(status.find("LOOP=1,3"), std::string::npos) << status;
+  EXPECT_NE(status.find("OVERDRIVE=1"), std::string::npos);
+
+  // An unreadable status keeps the cache
+  EXPECT_EQ(send("BOARD:STATUS?").compare(0, 3, "OK "), 0);
+  status = send("SYSTEM:STATUS?");
+  EXPECT_NE(status.find("LOOP=1,3"), std::string::npos) << status;
+  EXPECT_NE(status.find("OVERDRIVE=1"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, BoardResetOpensReturnPathInCache)
+{
+  initHardware(true);
+  allowBoardCommands();
+  EXPECT_EQ(send("BOARD:MUX:ROUTE 1,3"), "OK\n");
+  EXPECT_NE(send("BOARD:GAIN 3,7").find("WARN"), std::string::npos);
+
+  EXPECT_EQ(send("BOARD:RESET"), "OK Board reset complete\n");
+  std::string status = send("SYSTEM:STATUS?");
+  EXPECT_NE(status.find("LOOP=1,X"), std::string::npos) << status;
+  EXPECT_NE(status.find("OVERDRIVE=0"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, FailedRouteLeavesCachedRoutingUnchanged)
+{
+  initHardware(true);
+
+  static const std::string c_BoardError = "UART timeout";
+  EXPECT_CALL(*m_rawBoard, setMuxRoute(0, 2)).WillOnce(Return(false));
+  ON_CALL(*m_rawBoard, getLastError()).WillByDefault(ReturnRef(c_BoardError));
+
+  EXPECT_NE(send("BOARD:MUX:ROUTE 1,3").find("ERR_HARDWARE"), std::string::npos);
+  EXPECT_NE(send("SYSTEM:STATUS?").find("LOOP=1,X"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, RefusedMeasurementKeepsSaturationEvidence)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(1024);
+  allowBoardCommands();
+
+  ON_CALL(*m_rawHw, getAcquiredSignal(_))
+      .WillByDefault(WithArg<0>(Invoke([](std::vector<float>& s) {
+        s.assign(1024, 1.0f);
+        return true;
+      })));
+  EXPECT_EQ(send("MEASURE:SINC 200,100,1024,64,1").compare(0, 3, "OK "), 0);
+  EXPECT_NE(send("SYSTEM:STATUS?").find("SAT=1"), std::string::npos);
+
+  EXPECT_EQ(send("BOARD:MUX:ROUTE 1,3"), "OK\n");
+  EXPECT_NE(send("BOARD:GAIN 3,4").find("WARN"), std::string::npos);
+
+  // Refused: not run, SAT kept
+  EXPECT_NE(send("MEASURE:SINC 200,100,1024,64,1").find("ADC overdrive"), std::string::npos);
+  EXPECT_NE(send("SYSTEM:STATUS?").find("SAT=1"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, SampleGainDefaultsToOneAndIsReported)
+{
+  initHardware(true);
+
+  EXPECT_EQ(send("BOARD:ADC:SAMPLEGAIN?"), "OK 1\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("SAMPLEGAIN=1"), std::string::npos);
+
+  EXPECT_EQ(send("BOARD:ADC:SAMPLEGAIN 0.01"), "OK 0.01\n");
+  EXPECT_EQ(send("BOARD:ADC:SAMPLEGAIN?"), "OK 0.01\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("SAMPLEGAIN=0.01"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, SampleGainAllowsHighReturnGainForWeakSignals)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(1024);
+  allowBoardCommands();
+  EXPECT_EQ(send("BOARD:MUX:ROUTE 1,3"), "OK\n");
+
+  // Unity sample assumed: x16 on the return channel is refused
+  EXPECT_NE(send("BOARD:GAIN 3,7").find("WARN"), std::string::npos);
+  EXPECT_NE(send("MEASURE:SINC 200,100,1024,64,1").find("ADC overdrive"), std::string::npos);
+
+  // Declared 1% return: 1.0 x 0.01 x 16 = 0.16 V
+  EXPECT_EQ(send("BOARD:ADC:SAMPLEGAIN 0.01"), "OK 0.01\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("OVERDRIVE=0"), std::string::npos);
+  EXPECT_EQ(send("MEASURE:SINC 200,100,1024,64,1").compare(0, 3, "OK "), 0);
+}
+
+TEST_F(CommandHandlerTest, SampleGainAboveOneTightensTheLimit)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(1024);
+  allowBoardCommands();
+  EXPECT_EQ(send("BOARD:MUX:ROUTE 1,3"), "OK\n");
+  EXPECT_EQ(send("MEASURE:SINC 200,100,1024,64,1").compare(0, 3, "OK "), 0);
+
+  std::string resp = send("BOARD:ADC:SAMPLEGAIN 4");
+  EXPECT_EQ(resp.compare(0, 5, "OK 4 "), 0) << resp;
+  EXPECT_NE(resp.find("~4.00 V"), std::string::npos);
+  EXPECT_NE(resp.find("at sample gain 4"), std::string::npos);
+  EXPECT_NE(resp.find("suggested: BOARD:GAIN 3,1"), std::string::npos);
+
+  EXPECT_NE(send("MEASURE:SINC 200,100,1024,64,1").find("ADC overdrive"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, SampleGainDoesNotApplyToDirectRoute)
+{
+  initHardware(true);
+  allowBoardCommands();
+  EXPECT_EQ(send("BOARD:ADC:SAMPLEGAIN 0.001"), "OK 0.001\n");
+
+  // IN1 straight to the ADC bypasses the sample
+  EXPECT_EQ(send("BOARD:MUX:ROUTE 1,1"), "OK\n");
+  std::string resp = send("BOARD:GAIN 1,4");
+  EXPECT_NE(resp.find("~2.00 V"), std::string::npos) << resp;
+  EXPECT_EQ(resp.find("sample gain"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, SampleGainRejectsInvalidArguments)
+{
+  EXPECT_NE(send("BOARD:ADC:SAMPLEGAIN 0.5").find("ERR_NOT_INIT"), std::string::npos);
+
+  initHardware(true);
+  EXPECT_NE(send("BOARD:ADC:SAMPLEGAIN").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("BOARD:ADC:SAMPLEGAIN abc").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("BOARD:ADC:SAMPLEGAIN nan").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("BOARD:ADC:SAMPLEGAIN 1,2").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("BOARD:ADC:SAMPLEGAIN 0").find("ERR_PARAM"), std::string::npos);
+  EXPECT_NE(send("BOARD:ADC:SAMPLEGAIN -1").find("ERR_PARAM"), std::string::npos);
+  EXPECT_NE(send("BOARD:ADC:SAMPLEGAIN 1e9").find("ERR_PARAM"), std::string::npos);
+
+  // Rejected values leave the setting untouched
+  EXPECT_EQ(send("BOARD:ADC:SAMPLEGAIN?"), "OK 1\n");
+}
+
+TEST_F(CommandHandlerTest, SampleGainIsResetByRst)
+{
+  initHardware(true);
+  EXPECT_EQ(send("BOARD:ADC:SAMPLEGAIN 0.01"), "OK 0.01\n");
+
+  EXPECT_EQ(send("*RST"), "OK\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("SAMPLEGAIN=1"), std::string::npos);
+  EXPECT_EQ(send("SYSTEM:STATUS?").find("SAMPLEGAIN=0.01"), std::string::npos);
 }
 
 } // namespace

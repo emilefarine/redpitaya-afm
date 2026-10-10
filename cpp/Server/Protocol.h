@@ -45,27 +45,21 @@ struct ServerConfig
  * keyword.  The parser strips a trailing '?' (marking a query) before
  * matching; the isQuery flag in ParsedCommand distinguishes set from query.
  *
- * ADC input protection (BOARD:ADC:LOOP):
- *   The board boosts the Red Pitaya output before it reaches the AFM and the
- *   response returns through a board input channel into the +/-1 V ADC range.
- *   BOARD:ADC:LOOP <excite_ch>,<return_ch> tells the server which channels
- *   form that loop. It then tracks the last excitation amplitude and the
- *   gains of both channels, warns on BOARD:GAIN when the predicted peak
- *   would saturate the ADC ("OK <gain> WARN: ...", commands are never
- *   rejected), and reports state via SYSTEM:STATUS fields LOOP, OVERDRIVE
- *   and SAT. MEASURE replies keep their "OK DATA <N> <BYTES>" format, so
- *   overdrive/saturation results are only visible in SYSTEM:STATUS.
+ * ADC input protection (see InputSafety.h):
+ *   The server predicts the peak at the +/-1 V ADC input from the excitation
+ *   amplitude and the gains of the excitation and return channels.
  *
- *   Scope and assumptions of the monitor:
- *   - It assumes the +/-1 V (LV) jumper position on the Red Pitaya inputs;
- *     with the HV jumper the estimates and SAT are invalid.
- *   - It tracks the two configured channels, not the MUX routing. If the
- *     physical return path is rerouted, re-issue BOARD:ADC:LOOP.
- *   - The estimate is a worst case upper bound (AFM transmitting the full
- *     excitation back); SaturationDetector (SAT) reports actual clipping.
- *     A MEASURE:SWEEP always completes; saturated points only raise SAT.
- *   - Unknown board gain state degrades to the x16 assumption, so a failing
- *     gain query produces warnings instead of silence.
+ *   BOARD:ADC:LOOP AUTO (default)     excitation on IN1, return = input routed to OUT1
+ *   BOARD:ADC:LOOP <excite>,<return>  channels named by hand
+ *   BOARD:ADC:LOOP OFF                monitor disabled
+ *   BOARD:ADC:PROTECT ON (default)    MEASURE predicted above full scale -> ERR_PARAM
+ *   BOARD:ADC:PROTECT OFF             override, the measurement runs
+ *   BOARD:ADC:SAMPLEGAIN <factor>     expected return / excitation ratio of the AFM (default 1)
+ *
+ *   Other BOARD replies get a "WARN: ..." suffix instead of being rejected.
+ *   SYSTEM:STATUS reports LOOP (effective pair; return "X" = OUT1 open,
+ *   "?" = unknown), OVERDRIVE, SAT, PROTECT and SAMPLEGAIN. Unknown board
+ *   state counts as the worst case.
  */
 #define AFM_COMMAND_LIST \
     X(IDN,                  "*IDN")                   /* IEEE 488.2: Identify */ \
@@ -82,6 +76,8 @@ struct ServerConfig
     X(BOARD_MUX_DISCONNECT, "BOARD:MUX:DISCONNECT")   /* Disconnect MUX output */ \
     X(BOARD_GAIN,           "BOARD:GAIN")             /* Set channel gain */ \
     X(BOARD_ADC_LOOP,       "BOARD:ADC:LOOP")         /* Configure ADC return-path overdrive monitor */ \
+    X(BOARD_ADC_PROTECT,    "BOARD:ADC:PROTECT")      /* Refuse or allow ADC overdrive */ \
+    X(BOARD_ADC_SAMPLEGAIN, "BOARD:ADC:SAMPLEGAIN")   /* Expected AFM return ratio */ \
     X(BOARD_RESET,          "BOARD:RESET")            /* Reset electronic board */ \
     X(BOARD_STATUS,         "BOARD:STATUS")           /* Get electronic board status */ \
     X(MEAS_SINC,            "MEASURE:SINC")           /* Broadband sinc measurement + FFT */ \
@@ -395,7 +391,7 @@ inline std::string buildSpectrumResponse(const std::vector<SpectrumPoint>& spect
 struct VersionInfo
 {
   static constexpr int MAJOR = 2;
-  static constexpr int MINOR = 5;
+  static constexpr int MINOR = 6;
   static constexpr int PATCH = 0;
 
   static std::string toString()

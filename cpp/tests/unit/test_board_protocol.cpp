@@ -216,4 +216,85 @@ TEST(BoardGainStatusParseTest, RespectsNumChannelsBound)
   EXPECT_FALSE(valid[3]);
 }
 
+TEST(BoardRoutingStatusParseTest, ParsesFirmwareStatusBlock)
+{
+  uint8_t routing[4] = {7, 7, 7, 7};
+  bool valid[4] = {false, false, false, false};
+
+  const std::string status = "\r\n=== MUX Status ===\r\nRouting:\r\n"
+                             "  OUT1 <- IN3\r\n  OUT2 <- X (disconnected)\r\n"
+                             "  OUT3 <- IN1\r\n  OUT4 <- IN4\r\n"
+                             "Gains:\r\n  IN1: x2\r\n  IN2: x1\r\n  IN3: x1/8\r\n"
+                             "  IN4: x16\r\n==================\r\n";
+  ASSERT_TRUE(BoardProtocol::parseRoutingStatus(status, routing, valid, 4));
+  EXPECT_TRUE(valid[0]);
+  EXPECT_TRUE(valid[1]);
+  EXPECT_TRUE(valid[2]);
+  EXPECT_TRUE(valid[3]);
+  EXPECT_EQ(routing[0], 2);
+  EXPECT_EQ(routing[1], IElectronicBoard::DISCONNECTED);
+  EXPECT_EQ(routing[2], 0);
+  EXPECT_EQ(routing[3], 3);
+}
+
+TEST(BoardRoutingStatusParseTest, ParsesLinesWithoutCarriageReturn)
+{
+  uint8_t routing[4] = {7, 7, 7, 7};
+  bool valid[4] = {false, false, false, false};
+
+  // As forwarded by sendCommand, echo line included
+  const std::string status = "> STATUS\n=== MUX Status ===\nRouting:\n  OUT1 <- IN2\n"
+                             "  OUT2 <- X (disconnected)\nGains:\n  IN1: x1";
+  ASSERT_TRUE(BoardProtocol::parseRoutingStatus(status, routing, valid, 4));
+  EXPECT_TRUE(valid[0]);
+  EXPECT_EQ(routing[0], 1);
+  EXPECT_TRUE(valid[1]);
+  EXPECT_EQ(routing[1], IElectronicBoard::DISCONNECTED);
+  EXPECT_FALSE(valid[2]);
+  EXPECT_FALSE(valid[3]);
+}
+
+TEST(BoardRoutingStatusParseTest, IgnoresGainSectionAndForeignText)
+{
+  uint8_t routing[4] = {7, 7, 7, 7};
+  bool valid[4] = {false, false, false, false};
+
+  // Gains section and malformed lines are ignored
+  const std::string status = "Routing:\n  OUT1 <- IN9\n  OUT2 IN1\n  XOUT3 <- IN1\n"
+                             "  OUT4 <- IN2\nGains:\n  OUT1 <- IN3\n";
+  ASSERT_TRUE(BoardProtocol::parseRoutingStatus(status, routing, valid, 4));
+  EXPECT_FALSE(valid[0]);
+  EXPECT_FALSE(valid[1]);
+  EXPECT_FALSE(valid[2]);
+  EXPECT_TRUE(valid[3]);
+  EXPECT_EQ(routing[3], 1);
+  EXPECT_EQ(routing[0], 7);
+}
+
+TEST(BoardRoutingStatusParseTest, ReturnsFalseWithoutRoutingSection)
+{
+  uint8_t routing[4] = {7, 7, 7, 7};
+  bool valid[4] = {true, true, true, true};
+
+  EXPECT_FALSE(BoardProtocol::parseRoutingStatus("OUT1->IN1 GAIN x2", routing, valid, 4));
+  EXPECT_FALSE(valid[0]);
+  EXPECT_FALSE(valid[3]);
+  EXPECT_EQ(routing[0], 7);
+}
+
+TEST(BoardRoutingStatusParseTest, RespectsNumChannelsBound)
+{
+  uint8_t routing[4] = {7, 7, 7, 7};
+  bool valid[4] = {false, false, false, false};
+
+  const std::string status = "Routing:\n  OUT1 <- IN4\n  OUT2 <- IN1\n  OUT4 <- IN1\n";
+  ASSERT_TRUE(BoardProtocol::parseRoutingStatus(status, routing, valid, 2));
+  // IN4 and OUT4 are out of bounds: not written
+  EXPECT_FALSE(valid[0]);
+  EXPECT_TRUE(valid[1]);
+  EXPECT_EQ(routing[1], 0);
+  EXPECT_FALSE(valid[3]);
+  EXPECT_EQ(routing[3], 7);
+}
+
 } // namespace

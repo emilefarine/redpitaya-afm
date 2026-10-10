@@ -49,6 +49,19 @@ public:
                               bool validOut[],
                               uint8_t numChannels);
 
+  /**
+   * @brief Parse the "Routing:" section of the board STATUS text
+   *
+   * Lines are "OUT<n> <- IN<m>" or "OUT<n> <- X". routingOut gets the 0-based
+   * input or IElectronicBoard::DISCONNECTED; validOut marks the outputs read.
+   *
+   * @return true when the section was found
+   */
+  static bool parseRoutingStatus(const std::string& statusText,
+                                 uint8_t routingOut[],
+                                 bool validOut[],
+                                 uint8_t numChannels);
+
   const std::string& getLastError() const;
 
 private:

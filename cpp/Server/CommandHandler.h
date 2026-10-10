@@ -16,6 +16,14 @@
 namespace AFM
 {
 
+/** @brief Source of the monitored excitation / return loop */
+enum class AdcLoopMode : uint8_t
+{
+  AUTO,   // From the MUX routing
+  MANUAL, // From BOARD:ADC:LOOP <excite>,<return>
+  OFF
+};
+
 struct SystemStatus
 {
   bool hardwareInitialized;
@@ -25,10 +33,12 @@ struct SystemStatus
   OperatingMode mode;
 
   // ADC input protection state (see BOARD:ADC:LOOP in Protocol.h)
-  bool loopMonitorEnabled;      ///< Loop configured, interlock warnings active
-  uint8_t loopExciteChannel;    ///< Board input driven by the RP DAC (0-based)
-  uint8_t loopReturnChannel;    ///< Board input returning into the ADC (0-based)
-  bool adcOverdrive;            ///< Worst case estimate exceeds ADC full scale
+  AdcLoopMode loopMode;
+  uint8_t loopExciteChannel;    ///< MANUAL only (0-based)
+  uint8_t loopReturnChannel;    ///< MANUAL only (0-based)
+  bool adcProtectEnabled;       ///< Refuse MEASURE predicted to overdrive
+  float adcSampleGain;          ///< Expected return / excitation ratio of the AFM
+  bool adcOverdrive;            ///< Estimate exceeds ADC full scale
   bool adcSaturated;            ///< Saturation detected in the last acquisition
   float adcSaturationRatio;     ///< Fraction of saturated samples (last acquisition)
 
@@ -38,9 +48,11 @@ struct SystemStatus
       , measurementInProgress(false)
       , currentDecimation(IRedPitayaHardware::DEFAULT_DECIMATION)
       , mode(OperatingMode::FULL)
-      , loopMonitorEnabled(false)
+      , loopMode(AdcLoopMode::AUTO)
       , loopExciteChannel(0)
       , loopReturnChannel(0)
+      , adcProtectEnabled(true)
+      , adcSampleGain(1.0f)
       , adcOverdrive(false)
       , adcSaturated(false)
       , adcSaturationRatio(0.0f)
@@ -111,6 +123,8 @@ private:
   std::string _handleBoardMuxDisconnect(const ParsedCommand& cmd);
   std::string _handleBoardGain(const ParsedCommand& cmd);
   std::string _handleBoardAdcLoop(const ParsedCommand& cmd);
+  std::string _handleBoardAdcProtect(const ParsedCommand& cmd);
+  std::string _handleBoardAdcSampleGain(const ParsedCommand& cmd);
   std::string _handleBoardReset(const ParsedCommand& cmd);
   std::string _handleBoardStatus(const ParsedCommand& cmd);
 
@@ -138,10 +152,26 @@ private:
   double _applyDecimation(uint16_t dec, std::string& errorResponse);
 
   // ADC input protection helpers
+  struct AdcLoopEstimate
+  {
+    bool active;
+    bool returnOpen;       ///< Nothing routed to the ADC
+    bool returnKnown;      ///< Routing could be read
+    uint8_t exciteChannel; ///< 0-based
+    uint8_t returnChannel; ///< 0-based
+    float peak;            ///< V at the ADC input
+  };
+
+  AdcLoopEstimate _estimateAdcLoop(float amplitude) const;
+  float _loopPeak(float amplitude, uint8_t exciteChannel, uint8_t returnChannel) const;
+  std::string _describeOverdrive(const AdcLoopEstimate& estimate, float amplitude) const;
+  bool _checkAdcProtection(float amplitude, std::string& errorResponse) const;
   bool _updateAdcOverdriveEstimate();
   std::string _buildOverdriveSuffix();
-  void _refreshGainCacheFromBoard();
-  void _resetGainCache();
+  std::string _buildOkWithOverdriveWarning();
+  void _refreshBoardCacheFromBoard();
+  void _refreshBoardCacheFromStatus(const std::string& statusText);
+  void _resetBoardCache();
 
   /**
    * @brief Wait for measurement completion with timeout
@@ -161,9 +191,10 @@ private:
 
   SystemStatus m_status;
 
-  /** Cached board input gains; updated on BOARD:GAIN/RESET, parsed from the
-   *  board STATUS block on SYSTEM:INIT so the estimate starts from real state */
+  /** Board state cache: read at SYSTEM:INIT, updated by BOARD commands and BOARD:STATUS? */
   GainSetting m_channelGains[IElectronicBoard::NUM_CHANNELS];
+  uint8_t m_muxRouting[IElectronicBoard::NUM_CHANNELS]; ///< Input per output, or DISCONNECTED
+  bool m_muxRoutingKnown[IElectronicBoard::NUM_CHANNELS];
   /** Amplitude of the last commanded excitation (fraction of +/-1 V DAC FS) */
   float m_lastExcitationAmplitude;
 };

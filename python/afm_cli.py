@@ -116,6 +116,10 @@ class AFMShell(cmd.Cmd):
             print(f"  ADC Loop (exc,ret):   {status.adc_loop or 'OFF'}")
             print(f"  ADC Overdrive Warn:   {status.adc_overdrive}")
             print(f"  ADC Saturated:        {status.adc_saturated}")
+            protect = {True: "ON", False: "OFF (overridden)", None: "n/a (server < 2.6)"}
+            print(f"  ADC Protection:       {protect[status.adc_protect]}")
+            if status.adc_sample_gain is not None:
+                print(f"  ADC Sample Gain:      {status.adc_sample_gain:g}")
         except AFMError as e:
             print(f"Error: {e}")
 
@@ -242,7 +246,7 @@ class AFMShell(cmd.Cmd):
             print(f"Error: {e}")
 
     def do_adc_loop(self, arg):
-        """Configure ADC input protection: adc_loop <excite_ch> <return_ch> or adc_loop off"""
+        """Select the ADC protection loop: adc_loop auto | <excite_ch> <return_ch> | off"""
         hint = self._board_unavailable_hint()
         if hint:
             print(hint)
@@ -252,6 +256,9 @@ class AFMShell(cmd.Cmd):
             if args and args[0].lower() == 'off':
                 result = self.client.disable_adc_loop()
                 print(f"OK: {result}")
+            elif args and args[0].lower() == 'auto':
+                result = self.client.set_adc_loop_auto()
+                print(f"OK: {result}")
             elif len(args) == 2:
                 excite, ret = int(args[0]), int(args[1])
                 result = self.client.configure_adc_loop(excite, ret)
@@ -260,13 +267,59 @@ class AFMShell(cmd.Cmd):
                     print("  The boosted signal would saturate the +/-1 V ADC input.")
                     print("  Lower the return channel gain (PGA) or the excitation amplitude.")
             else:
-                print("Usage: adc_loop <excite_ch> <return_ch>  or  adc_loop off  (channels 1-4)")
+                print("Usage: adc_loop auto | <excite_ch> <return_ch> | off  (channels 1-4)")
+                print("  auto:      follow the MUX routing (default)")
                 print("  excite_ch: board input fed by the Red Pitaya output")
                 print("  return_ch: board input returning into the Red Pitaya ADC")
         except ValueError:
             print("Error: Arguments must be integers")
         except AFMError as e:
             print(f"Error: {e}")
+
+    def do_adc_protect(self, arg):
+        """Refuse or allow measurements that would overdrive the ADC: adc_protect [on|off]"""
+        hint = self._board_unavailable_hint()
+        if hint:
+            print(hint)
+            return
+        choice = arg.strip().lower()
+        try:
+            if not choice:
+                state = "ON" if self.client.get_adc_protect() else "OFF"
+                print(f"  ADC Protection: {state}")
+            elif choice in ('on', 'off'):
+                result = self.client.set_adc_protect(choice == 'on')
+                print(f"OK: {result}")
+                if choice == 'off':
+                    print("  The Red Pitaya input is no longer protected against overdrive.")
+            else:
+                print("Usage: adc_protect [on|off]")
+        except AFMError as e:
+            print(f"Error: {e}")
+
+    def do_adc_sample_gain(self, arg):
+        """Expected return / excitation ratio of the sample: adc_sample_gain [factor]"""
+        hint = self._board_unavailable_hint()
+        if hint:
+            print(hint)
+            return
+        try:
+            if not arg.strip():
+                print(f"  ADC Sample Gain: {self.client.get_adc_sample_gain():g}")
+            else:
+                result = self.client.set_adc_sample_gain(float(arg.strip()))
+                print(f"OK: {result}")
+        except ValueError:
+            print("Usage: adc_sample_gain [factor]  (e.g. 0.01 for a weak return signal)")
+        except AFMError as e:
+            print(f"Error: {e}")
+
+    @staticmethod
+    def _print_measure_error(error: AFMError):
+        print(f"\nError: {error}")
+        if getattr(error, "is_adc_overdrive", False):
+            print("  Not run. Lower 'adc_sample_gain' if the return signal is weak,")
+            print("  or use 'adc_protect off' to override.")
 
     # ------ Measurement Commands ------
 
@@ -303,7 +356,7 @@ class AFMShell(cmd.Cmd):
         except ValueError:
             print("Error: Invalid arguments")
         except AFMError as e:
-            print(f"\nError: {e}")
+            self._print_measure_error(e)
 
     def do_sweep(self, arg):
         """Frequency sweep measurement: sweep <center_kHz> <range_kHz> [step_kHz] [decimation] [amplitude]"""
@@ -345,7 +398,7 @@ class AFMShell(cmd.Cmd):
         except ValueError:
             print("Error: Invalid arguments")
         except AFMError as e:
-            print(f"\nError: {e}")
+            self._print_measure_error(e)
 
     @staticmethod
     def _print_spectrum_summary(spectrum: SpectrumData):
@@ -445,9 +498,13 @@ Electronic Board:
   mux disconnect <out>    Disconnect output (BOARD:MUX:DISCONNECT)
   gain <ch> <idx>         Set gain (BOARD:GAIN)
                           ch: 1-4, idx: 0=1/8, 1=1/4, 2=1/2, 3=1, 4=2, 5=4, 6=8, 7=16
-  adc_loop <exc> <ret>    Configure ADC input protection (BOARD:ADC:LOOP)
-                          adc_loop off disables it; the server warns on 'gain'
-                          commands that would saturate the +/-1 V ADC input
+  adc_loop auto           Follow the MUX routing for ADC protection (default)
+  adc_loop <exc> <ret>    Name the excitation / return channels by hand
+  adc_loop off            Disable the ADC input monitor (BOARD:ADC:LOOP)
+  adc_protect [on|off]    Refuse measurements that would overdrive the
+                          +/-1 V ADC input (BOARD:ADC:PROTECT, default on)
+  adc_sample_gain [x]     Expected return / excitation ratio of the sample
+                          (BOARD:ADC:SAMPLEGAIN, default 1)
   board_reset             Reset board (BOARD:RESET)
   board_status            Show board status (BOARD:STATUS?)
 

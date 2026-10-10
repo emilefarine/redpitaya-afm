@@ -169,6 +169,29 @@ with AFMClient("192.168.1.100") as client:
     sweep = client.measure_sweep(center_kHz=1000, range_kHz=100, step_kHz=0.5)
 ```
 
+### 5. ADC input protection
+
+Keep the Red Pitaya input jumpers on **LV (+/-1 V)**. That input is rated 6 V absolute
+maximum, and only its full scale above 1 kHz, while the board can output about +/-10.5 V.
+
+Before each measurement the server predicts the peak at the ADC:
+`amplitude x excitation gain x sample gain x return gain`.
+
+- **Loop:** excitation on **IN1**, return = the input routed to **OUT1**. Automatic.
+- **Refusal:** above 1 V the measurement is not run: `ERR_PARAM: ADC overdrive: ...` with a
+  suggested gain or amplitude.
+- **Weak signals:** `BOARD:ADC:SAMPLEGAIN <factor>` (CLI `adc_sample_gain`, GUI "Sample
+  gain") is the expected return / excitation ratio of the sample, default 1. Set it below
+  1 to use a high return gain.
+- **Override:** `BOARD:ADC:PROTECT OFF` (CLI `adc_protect off`, GUI "ADC protection"
+  checkbox). `*RST` and a restart re-enable it and reset the sample gain.
+- **State:** `LOOP=`, `OVERDRIVE=`, `SAT=`, `PROTECT=`, `SAMPLEGAIN=` in `SYSTEM:STATUS?`,
+  "ADC Input" in the GUI.
+
+The prediction is only as good as the declared sample gain and assumes a +/-1 V output
+(`DAC_FULL_SCALE` in `cpp/Hardware/InputSafety.h`). `SAT=` reports real clipping. RP-only
+mode has no monitor.
+
 ## SCPI protocol
 
 The server speaks an SCPI-inspired ASCII protocol over **TCP port 5025**. Commands are
@@ -185,6 +208,9 @@ every line ends with `\n`. Responses are a single line: `OK [data]` or `ERR_<COD
 | `BOARD:MUX:DISCONNECT <out>` | Disconnect a multiplexer output |
 | `BOARD:GAIN <ch>,<idx>` | Set programmable gain (idx 0-7 → ×1/8 … ×16) |
 | `BOARD:STATUS?` / `BOARD:RESET` | Query board routing/gains, reset board to defaults |
+| `BOARD:ADC:LOOP AUTO` / `<excite>,<return>` / `OFF` | ADC protection loop: from the routing (default), by hand, or off |
+| `BOARD:ADC:PROTECT ON` / `OFF` | Refuse overdriving measurements (default), or override |
+| `BOARD:ADC:SAMPLEGAIN <factor>` | Expected return / excitation ratio of the sample (default 1) |
 | `MEASURE:SINC <center_kHz>,<bw_kHz>[,<samples>,<dec>,<amp>]` | Broadband sinc + FFT |
 | `MEASURE:SWEEP <center_kHz>,<range_kHz>[,<step_kHz>,<dec>,<amp>]` | Lock-in frequency sweep |
 

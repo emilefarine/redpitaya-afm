@@ -3,50 +3,50 @@
 #include "IElectronicBoard.h"
 
 /**
- * @brief Portable safety estimates for the Red Pitaya ADC input path
+ * @brief Peak estimate at the Red Pitaya ADC input, used to refuse overdrive
  *
- * Signal loop: the Red Pitaya DAC (<= +/-1 V) drives a board input whose
- * PGA849 can boost it (x1/8 .. x16), the signal leaves the board towards the
- * AFM and the response returns through another board input channel into the
- * Red Pitaya ADC. The Red Pitaya input survives up to +/-30 V, but its LV
- * range (jumper selectable) saturates beyond +/-1 V, so this header models
- * the worst case peak at the ADC to protect measurement validity.
+ * Loop: RP DAC -> board input (PGA x1/8..x16) -> AFM -> board input (PGA) -> RP ADC.
  *
- * Assumptions and relationship to the saturation detector:
- * - The model assumes the LV (+/-1 V) jumper position on the Red Pitaya.
- *   With the HV jumper (+/-20 V) both the estimates below and the saturation
- *   detector threshold are invalid.
- * - The estimated peak is a conservative upper bound assuming the AFM
- *   transmits the excitation back unchanged (worst case, e.g. a direct
- *   cable loop during setup). It uses a strict > full scale edge: peaks in
- *   the [fullScale, fullScale + epsilon) band are not predicted.
- * - SaturationDetector (threshold 0.99 x full scale) is the empirical
- *   second line of defense: it catches acquisitions that are actually
- *   clipped even when this optimistic-in-band upper bound did not warn.
+ * The RP inputs stay on LV (+/-1 V): 6 V absolute maximum, and above 1 kHz the
+ * full scale itself is the limit. The board can output about +/-10.5 V.
  *
- * The board output stage clips near +/-10.5 V (OPA828 buffers on +/-12 V
- * rails, TVS clamps at ~12 V), so no reachable signal can damage the ADC.
+ * The estimate is nominal: the AFM is assumed to return the excitation
+ * scaled by the declared sample gain (default 1). SaturationDetector reports
+ * what actually clipped.
  */
 namespace InputSafety
 {
 
-/** Full scale of the Red Pitaya ADC input in LV range (V) */
+/** ADC full scale in LV range (V), also the enforced limit */
 static constexpr float ADC_FULL_SCALE = 1.0f;
 
-/** Approximate clip level of the board output buffers (V) */
+/** DAC peak at amplitude 1.0 into 50 ohm (V); to be measured into the board input */
+static constexpr float DAC_FULL_SCALE = 1.0f;
+
+/** Board output clip level (V) */
 static constexpr float BOARD_RAIL_VOLTAGE = 10.5f;
 
 /** Highest valid SCPI gain index of the board PGA settings */
 static constexpr uint8_t MAX_GAIN_INDEX = IElectronicBoard::MAX_GAIN_INDEX;
 
+/** Board input wired to the RP DAC (IN1, 0-based) */
+static constexpr uint8_t DAC_LINK_INPUT = 0;
+
+/** Board output wired to the acquired RP ADC input (OUT1, 0-based) */
+static constexpr uint8_t ADC_LINK_OUTPUT = 0;
+
+/** Accepted range of the sample gain (return / excitation ratio of the AFM) */
+static constexpr float MIN_SAMPLE_GAIN = 1.0e-6f;
+static constexpr float MAX_SAMPLE_GAIN = 1.0e3f;
+
 /**
  * @brief Peak voltage the board can drive towards the AFM
- * @param amplitude Excitation amplitude as a fraction of the +/-1 V DAC range
+ * @param amplitude Excitation amplitude as a fraction of the DAC full scale
  * @param exciteGain Gain of the board input driven by the RP DAC
  */
 inline float boardDrivePeak(float amplitude, GainSetting exciteGain)
 {
-  float peak = amplitude * IElectronicBoard::gainFactor(exciteGain);
+  float peak = amplitude * DAC_FULL_SCALE * IElectronicBoard::gainFactor(exciteGain);
   if (peak > BOARD_RAIL_VOLTAGE)
   {
     peak = BOARD_RAIL_VOLTAGE;
@@ -54,42 +54,46 @@ inline float boardDrivePeak(float amplitude, GainSetting exciteGain)
   return peak;
 }
 
-/**
- * @brief Worst case peak voltage at the ADC input
- *
- * Assumes the AFM transmits the excitation amplitude back unchanged (worst
- * case, e.g. a direct cable loop during setup).
- */
-inline float estimateAdcPeak(float amplitude, GainSetting exciteGain, GainSetting returnGain)
+/** @brief Nominal peak at the ADC input; both gain stages clip at the board rail */
+inline float estimateAdcPeak(float amplitude, GainSetting exciteGain, GainSetting returnGain,
+                             float sampleGain = 1.0f)
 {
-  return boardDrivePeak(amplitude, exciteGain) * IElectronicBoard::gainFactor(returnGain);
+  float peak = boardDrivePeak(amplitude, exciteGain) * sampleGain *
+               IElectronicBoard::gainFactor(returnGain);
+  if (peak > BOARD_RAIL_VOLTAGE)
+  {
+    peak = BOARD_RAIL_VOLTAGE;
+  }
+  return peak;
 }
 
-/** @brief True when the worst case peak would saturate the ADC input */
-inline bool isOverdrive(float amplitude, GainSetting exciteGain, GainSetting returnGain)
+/** @brief True when the nominal peak would exceed the ADC full scale */
+inline bool isOverdrive(float amplitude, GainSetting exciteGain, GainSetting returnGain,
+                        float sampleGain = 1.0f)
 {
-  return estimateAdcPeak(amplitude, exciteGain, returnGain) > ADC_FULL_SCALE;
+  return estimateAdcPeak(amplitude, exciteGain, returnGain, sampleGain) > ADC_FULL_SCALE;
 }
 
 /**
- * @brief Highest return gain setting that keeps the worst case peak within
+ * @brief Highest return gain setting that keeps the nominal peak within
  *        the ADC full scale
  *
  * Gain factors strictly increase with the setting index, so the search can
  * stop at the first overdriving candidate.
  *
- * @param amplitude Excitation amplitude as a fraction of the +/-1 V DAC range
+ * @param amplitude Excitation amplitude as a fraction of the DAC full scale
  * @param exciteGain Gain of the board input driven by the RP DAC
  * @param safeGainOut Receives the suggested gain when true is returned
  * @return true if a safe return gain setting exists
  */
-inline bool maxSafeReturnGain(float amplitude, GainSetting exciteGain, GainSetting& safeGainOut)
+inline bool maxSafeReturnGain(float amplitude, GainSetting exciteGain, GainSetting& safeGainOut,
+                              float sampleGain = 1.0f)
 {
   bool found = false;
   for (uint8_t idx = 0; idx <= MAX_GAIN_INDEX; ++idx)
   {
     GainSetting candidate = IElectronicBoard::gainFromIndex(idx);
-    if (isOverdrive(amplitude, exciteGain, candidate))
+    if (isOverdrive(amplitude, exciteGain, candidate, sampleGain))
     {
       break;
     }
@@ -100,20 +104,38 @@ inline bool maxSafeReturnGain(float amplitude, GainSetting exciteGain, GainSetti
 }
 
 /**
- * @brief Highest excitation gain setting that keeps the worst case peak
+ * @brief Highest excitation gain setting that keeps the nominal peak
  *        within the ADC full scale for the given return gain
- * @param amplitude Excitation amplitude as a fraction of the +/-1 V DAC range
+ * @param amplitude Excitation amplitude as a fraction of the DAC full scale
  * @param returnGain Gain of the board input returning into the ADC
  * @param safeGainOut Receives the suggested gain when true is returned
  * @return true if a safe excitation gain setting exists
  */
-inline bool maxSafeExciteGain(float amplitude, GainSetting returnGain, GainSetting& safeGainOut)
+inline bool maxSafeExciteGain(float amplitude, GainSetting returnGain, GainSetting& safeGainOut,
+                              float sampleGain = 1.0f)
 {
   bool found = false;
   for (uint8_t idx = 0; idx <= MAX_GAIN_INDEX; ++idx)
   {
     GainSetting candidate = IElectronicBoard::gainFromIndex(idx);
-    if (isOverdrive(amplitude, candidate, returnGain))
+    if (isOverdrive(amplitude, candidate, returnGain, sampleGain))
+    {
+      break;
+    }
+    safeGainOut = candidate;
+    found = true;
+  }
+  return found;
+}
+
+/** @brief Highest safe gain of an input routed straight to the ADC (one gain stage) */
+inline bool maxSafeDirectGain(float amplitude, GainSetting& safeGainOut)
+{
+  bool found = false;
+  for (uint8_t idx = 0; idx <= MAX_GAIN_INDEX; ++idx)
+  {
+    GainSetting candidate = IElectronicBoard::gainFromIndex(idx);
+    if (boardDrivePeak(amplitude, candidate) > ADC_FULL_SCALE)
     {
       break;
     }

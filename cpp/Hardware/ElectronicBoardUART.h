@@ -96,6 +96,10 @@ public:
   bool queryGains(std::array<GainSetting, IElectronicBoard::NUM_CHANNELS>& gainsOut,
                   std::array<bool, IElectronicBoard::NUM_CHANNELS>& validOut) override;
 
+  /** @brief Query the routing from the board STATUS reply */
+  bool queryRouting(std::array<uint8_t, IElectronicBoard::NUM_CHANNELS>& routingOut,
+                    std::array<bool, IElectronicBoard::NUM_CHANNELS>& validOut) override;
+
   /**
    * @brief Reset board to defaults
    * All outputs disconnected, all gains set to 1

@@ -126,4 +126,68 @@ TEST(InputSafetyTest, GainIndexHelpersDegradeConservatively)
   EXPECT_FLOAT_EQ(IElectronicBoard::gainFactor(static_cast<GainSetting>(9)), 16.0f);
 }
 
+TEST(InputSafetyTest, EstimateAdcPeakClampsReturnStageAtBoardRail)
+{
+  // Both stages clip at the rail
+  EXPECT_FLOAT_EQ(InputSafety::BOARD_RAIL_VOLTAGE,
+                  InputSafety::estimateAdcPeak(1.0f, GainSetting::GAIN_16,
+                                               GainSetting::GAIN_16));
+  EXPECT_FLOAT_EQ(InputSafety::BOARD_RAIL_VOLTAGE,
+                  InputSafety::estimateAdcPeak(1.0f, GainSetting::GAIN_2,
+                                               GainSetting::GAIN_8));
+  // Below the rail: plain product
+  EXPECT_FLOAT_EQ(8.0f, InputSafety::estimateAdcPeak(1.0f, GainSetting::GAIN_2,
+                                                     GainSetting::GAIN_4));
+}
+
+TEST(InputSafetyTest, MaxSafeDirectGainFindsHighestSafeSetting)
+{
+  GainSetting safe = GainSetting::GAIN_16;
+
+  ASSERT_TRUE(InputSafety::maxSafeDirectGain(1.0f, safe));
+  EXPECT_EQ(GainSetting::GAIN_1, safe);
+
+  ASSERT_TRUE(InputSafety::maxSafeDirectGain(0.25f, safe));
+  EXPECT_EQ(GainSetting::GAIN_4, safe);
+
+  ASSERT_TRUE(InputSafety::maxSafeDirectGain(0.05f, safe));
+  EXPECT_EQ(GainSetting::GAIN_16, safe);
+}
+
+TEST(InputSafetyTest, WiringConstantsMatchTheFpgaChannels)
+{
+  // FPGA: DAC A and ADC 1, both on board connector 1
+  EXPECT_EQ(InputSafety::DAC_LINK_INPUT, 0);
+  EXPECT_EQ(InputSafety::ADC_LINK_OUTPUT, 0);
+  EXPECT_LT(InputSafety::DAC_LINK_INPUT, IElectronicBoard::NUM_CHANNELS);
+  EXPECT_LT(InputSafety::ADC_LINK_OUTPUT, IElectronicBoard::NUM_CHANNELS);
+}
+
+TEST(InputSafetyTest, SampleGainScalesTheReturnPath)
+{
+  // 1% sample into a x16 return: 0.16 V
+  EXPECT_FLOAT_EQ(0.16f, InputSafety::estimateAdcPeak(1.0f, GainSetting::GAIN_1,
+                                                      GainSetting::GAIN_16, 0.01f));
+  EXPECT_FALSE(InputSafety::isOverdrive(1.0f, GainSetting::GAIN_1, GainSetting::GAIN_16, 0.01f));
+
+  // An amplifying sample tightens the limit
+  EXPECT_TRUE(InputSafety::isOverdrive(1.0f, GainSetting::GAIN_1, GainSetting::GAIN_1, 2.0f));
+
+  // Still capped at the rail
+  EXPECT_FLOAT_EQ(InputSafety::BOARD_RAIL_VOLTAGE,
+                  InputSafety::estimateAdcPeak(1.0f, GainSetting::GAIN_16,
+                                               GainSetting::GAIN_16, 100.0f));
+}
+
+TEST(InputSafetyTest, SafeGainSearchUsesSampleGain)
+{
+  GainSetting safe = GainSetting::GAIN_1_8;
+
+  ASSERT_TRUE(InputSafety::maxSafeReturnGain(1.0f, GainSetting::GAIN_1, safe, 0.1f));
+  EXPECT_EQ(GainSetting::GAIN_8, safe);
+
+  ASSERT_TRUE(InputSafety::maxSafeExciteGain(1.0f, GainSetting::GAIN_16, safe, 0.01f));
+  EXPECT_EQ(GainSetting::GAIN_4, safe);
+}
+
 } // namespace

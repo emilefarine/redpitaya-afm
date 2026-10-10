@@ -69,6 +69,11 @@ class AFMCommandError(AFMError):
         self.status = match.group(1) if match else None
         self.message = (match.group(2) or "") if match else response
 
+    @property
+    def is_adc_overdrive(self) -> bool:
+        """True when a measurement was refused to protect the ADC input."""
+        return self.message.startswith("ADC overdrive")
+
 
 class AFMProtocolError(AFMError):
     """Malformed or oversized response that breaks the wire protocol."""
@@ -159,9 +164,11 @@ class SystemStatus:
     measurement_in_progress: bool = False
     decimation: int = 64
     mode: OperatingMode = OperatingMode.FULL
-    adc_loop: Optional[str] = None  # "<excite>,<return>" channel pair, None when off
-    adc_overdrive: bool = False     # Predicted excitation saturates the +/-1 V ADC input
+    adc_loop: Optional[str] = None  # Effective "<excite>,<return>" (return "X" open, "?" unknown)
+    adc_overdrive: bool = False     # Predicted peak exceeds the +/-1 V ADC input
     adc_saturated: bool = False     # Saturation detected in the last acquisition
+    adc_protect: Optional[bool] = None  # Overdrive refused; None for servers < 2.6.0
+    adc_sample_gain: Optional[float] = None  # Declared return / excitation ratio of the sample
 
     @classmethod
     def from_response(cls, response: str) -> 'SystemStatus':
@@ -194,6 +201,13 @@ class SystemStatus:
                     status.adc_overdrive = value == '1'
                 elif key == 'SAT':
                     status.adc_saturated = value == '1'
+                elif key == 'PROTECT':
+                    status.adc_protect = value == '1'
+                elif key == 'SAMPLEGAIN':
+                    try:
+                        status.adc_sample_gain = float(value)
+                    except ValueError:
+                        pass
 
         return status
 
@@ -695,12 +709,9 @@ class AFMClient:
 
     def configure_adc_loop(self, excite_ch: int, return_ch: int) -> str:
         """
-        Configure the ADC input protection loop (BOARD:ADC:LOOP).
+        Name the ADC protection loop by hand (BOARD:ADC:LOOP).
 
-        Tells the server which board input the Red Pitaya DAC drives and
-        which one returns the AFM signal into the Red Pitaya. The server
-        then warns on BOARD:GAIN when the predicted signal would saturate
-        the +/-1 V ADC input. The reply may carry a "WARN: ..." suffix.
+        Only for non-default wiring; see set_adc_loop_auto.
 
         Args:
             excite_ch: Board input fed by the Red Pitaya output (1-4)
@@ -708,9 +719,41 @@ class AFMClient:
         """
         return self.send_command(f"BOARD:ADC:LOOP {excite_ch},{return_ch}")
 
+    def set_adc_loop_auto(self) -> str:
+        """Derive the loop from the MUX routing (BOARD:ADC:LOOP AUTO, server default)"""
+        return self.send_command("BOARD:ADC:LOOP AUTO")
+
     def disable_adc_loop(self) -> str:
-        """Disable the ADC input protection loop (BOARD:ADC:LOOP OFF)"""
+        """Disable the ADC input monitor (BOARD:ADC:LOOP OFF)"""
         return self.send_command("BOARD:ADC:LOOP OFF")
+
+    def set_adc_protect(self, enabled: bool) -> str:
+        """
+        Refuse (True, server default) or allow overdriving measurements.
+
+        A refused measurement raises AFMCommandError with is_adc_overdrive.
+        """
+        return self.send_command(f"BOARD:ADC:PROTECT {'ON' if enabled else 'OFF'}")
+
+    def get_adc_protect(self) -> bool:
+        """True when overdriving measurements are refused (BOARD:ADC:PROTECT?)"""
+        return self.send_command("BOARD:ADC:PROTECT?") == "ON"
+
+    def set_adc_sample_gain(self, gain: float) -> str:
+        """
+        Declare the expected return / excitation ratio of the sample (default 1).
+
+        Below 1 for a weak return signal that needs a high return gain.
+        """
+        return self.send_command(f"BOARD:ADC:SAMPLEGAIN {gain}")
+
+    def get_adc_sample_gain(self) -> float:
+        """Declared sample gain (BOARD:ADC:SAMPLEGAIN?)"""
+        response = self.send_command("BOARD:ADC:SAMPLEGAIN?")
+        try:
+            return float(response)
+        except ValueError:
+            raise AFMProtocolError(f"Unexpected sample gain: {response}")
 
     def get_board_status(self) -> str:
         """Get electronic board status as a multi-line text block."""

@@ -9,6 +9,7 @@
 
 #include "Protocol.h"
 
+#include "../Hardware/BoardProtocol.h"
 #include "../Hardware/HardwareLimits.h"
 
 #include <algorithm>
@@ -70,7 +71,7 @@ CommandHandler::CommandHandler(HardwareFactory hardwareFactory,
     , m_lastExcitationAmplitude(1.0f)
 {
   m_status.mode = mode;
-  _resetGainCache();
+  _resetBoardCache();
 }
 
 CommandHandler::~CommandHandler()
@@ -120,6 +121,10 @@ std::string CommandHandler::handleCommand(const ParsedCommand& cmd)
     return _handleBoardGain(cmd);
   case Command::BOARD_ADC_LOOP:
     return _handleBoardAdcLoop(cmd);
+  case Command::BOARD_ADC_PROTECT:
+    return _handleBoardAdcProtect(cmd);
+  case Command::BOARD_ADC_SAMPLEGAIN:
+    return _handleBoardAdcSampleGain(cmd);
   case Command::BOARD_RESET:
     return _handleBoardReset(cmd);
   case Command::BOARD_STATUS:
@@ -164,11 +169,9 @@ std::string CommandHandler::_handleRst(const ParsedCommand& cmd)
   m_signalGen.reset();
   m_fftProcessor.reset();
   m_resonanceAnalyzer.reset();
-  // The gain cache becomes stale here because *RST does not reset the
-  // physical board. This is safe only because *RST also clears
-  // loopMonitorEnabled, and re-enabling the monitor requires SYSTEM:INIT,
-  // which re-reads the gains from the board. Keep that pairing intact.
-  _resetGainCache();
+  // *RST does not reset the board, so the cache is stale until SYSTEM:INIT
+  // re-reads it. Safe because the monitor is inactive until then.
+  _resetBoardCache();
   m_lastExcitationAmplitude = 1.0f;
   OperatingMode mode = m_status.mode;
   m_status = SystemStatus();
@@ -210,6 +213,7 @@ std::string CommandHandler::_handleSystStatus(const ParsedCommand& cmd)
 
   // Recompute the estimate so the reported state can never be stale
   _updateAdcOverdriveEstimate();
+  const AdcLoopEstimate loop = _estimateAdcLoop(m_lastExcitationAmplitude);
 
   std::ostringstream oss;
   oss << "HW_INIT=" << (m_status.hardwareInitialized ? "1" : "0")
@@ -218,18 +222,31 @@ std::string CommandHandler::_handleSystStatus(const ParsedCommand& cmd)
       << " DEC=" << m_status.currentDecimation
       << " MODE=" << operatingModeToString(m_status.mode)
       << " LOOP=";
-  if (m_status.loopMonitorEnabled)
+  if (loop.active)
   {
     // Report 1-based channel numbers matching board connector labels
-    oss << static_cast<int>(m_status.loopExciteChannel + 1) << ","
-        << static_cast<int>(m_status.loopReturnChannel + 1);
+    oss << static_cast<int>(loop.exciteChannel + 1) << ",";
+    if (loop.returnOpen)
+    {
+      oss << "X";
+    }
+    else if (!loop.returnKnown)
+    {
+      oss << "?";
+    }
+    else
+    {
+      oss << static_cast<int>(loop.returnChannel + 1);
+    }
   }
   else
   {
     oss << "OFF";
   }
   oss << " OVERDRIVE=" << (m_status.adcOverdrive ? "1" : "0")
-      << " SAT=" << (m_status.adcSaturated ? "1" : "0");
+      << " SAT=" << (m_status.adcSaturated ? "1" : "0")
+      << " PROTECT=" << (m_status.adcProtectEnabled ? "1" : "0")
+      << " SAMPLEGAIN=" << m_status.adcSampleGain;
 
   return buildOkResponse(oss.str());
 }
@@ -275,11 +292,10 @@ std::string CommandHandler::_handleSystInit(const ParsedCommand& cmd)
   double samplingFreq = ServerConfig::ADC_SAMPLE_RATE_HZ / m_status.currentDecimation;
   m_signalGen = std::make_unique<SignalGenerator>(samplingFreq, m_status.currentDecimation);
 
-  // Start the ADC loop estimate from the real board state (the board keeps
-  // its gains across re-initialization; BOARD:RESET restores the x1 defaults)
+  // The board keeps gains and routing across re-initialization: read them back
   if (m_status.boardConnected)
   {
-    _refreshGainCacheFromBoard();
+    _refreshBoardCacheFromBoard();
   }
 
   m_status.hardwareInitialized = true;
@@ -354,7 +370,9 @@ std::string CommandHandler::_handleBoardMuxRoute(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, m_board->getLastError());
   }
 
-  return buildOkResponse();
+  m_muxRouting[output - 1] = static_cast<uint8_t>(input - 1);
+  m_muxRoutingKnown[output - 1] = true;
+  return _buildOkWithOverdriveWarning();
 }
 
 std::string CommandHandler::_handleBoardMuxDisconnect(const ParsedCommand& cmd)
@@ -379,7 +397,9 @@ std::string CommandHandler::_handleBoardMuxDisconnect(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, m_board->getLastError());
   }
 
-  return buildOkResponse();
+  m_muxRouting[output - 1] = IElectronicBoard::DISCONNECTED;
+  m_muxRoutingKnown[output - 1] = true;
+  return _buildOkWithOverdriveWarning();
 }
 
 std::string CommandHandler::_handleBoardGain(const ParsedCommand& cmd)
@@ -417,28 +437,35 @@ std::string CommandHandler::_handleBoardGain(const ParsedCommand& cmd)
 
 std::string CommandHandler::_handleBoardAdcLoop(const ParsedCommand& cmd)
 {
+  static const char* const c_Usage =
+      "Usage: BOARD:ADC:LOOP AUTO | <excite_ch>,<return_ch> | OFF";
+
   std::string error;
   if (!_requireBoard(error))
     return error;
 
-  // Query: report the current loop configuration
+  // Query: report the configured loop mode
   if (cmd.args.empty())
   {
     if (!cmd.isQuery)
     {
-      return buildErrorResponse(ResponseStatus::ERR_SYNTAX,
-                                "Usage: BOARD:ADC:LOOP <excite_ch>,<return_ch> | OFF");
+      return buildErrorResponse(ResponseStatus::ERR_SYNTAX, c_Usage);
     }
-    if (m_status.loopMonitorEnabled)
+    switch (m_status.loopMode)
     {
+    case AdcLoopMode::MANUAL:
       // Reply with 1-based channel numbers matching board connector labels
       return buildOkResponse(std::to_string(m_status.loopExciteChannel + 1) + "," +
                              std::to_string(m_status.loopReturnChannel + 1));
+    case AdcLoopMode::OFF:
+      return buildOkResponse("OFF");
+    case AdcLoopMode::AUTO:
+    default:
+      return buildOkResponse("AUTO");
     }
-    return buildOkResponse("OFF");
   }
 
-  // Disable the monitor: BOARD:ADC:LOOP OFF
+  // AUTO | OFF
   if (cmd.args.size() == 1)
   {
     std::string arg0;
@@ -446,19 +473,22 @@ std::string CommandHandler::_handleBoardAdcLoop(const ParsedCommand& cmd)
     std::transform(arg0.begin(), arg0.end(), arg0.begin(), ::toupper);
     if (arg0 == "OFF")
     {
-      m_status.loopMonitorEnabled = false;
+      m_status.loopMode = AdcLoopMode::OFF;
       m_status.adcOverdrive = false;
       return buildOkResponse("ADC loop monitor off");
     }
-    return buildErrorResponse(ResponseStatus::ERR_SYNTAX,
-                              "Usage: BOARD:ADC:LOOP <excite_ch>,<return_ch> | OFF");
+    if (arg0 == "AUTO")
+    {
+      m_status.loopMode = AdcLoopMode::AUTO;
+      return buildOkResponse("AUTO" + _buildOverdriveSuffix());
+    }
+    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, c_Usage);
   }
 
   int excite, ret;
   if (!cmd.getArgInt(0, excite) || !cmd.getArgInt(1, ret))
   {
-    return buildErrorResponse(ResponseStatus::ERR_SYNTAX,
-                              "Usage: BOARD:ADC:LOOP <excite_ch>,<return_ch> | OFF");
+    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, c_Usage);
   }
 
   // Accept 1-based channel numbers matching board connector labels (1-4)
@@ -470,11 +500,90 @@ std::string CommandHandler::_handleBoardAdcLoop(const ParsedCommand& cmd)
 
   m_status.loopExciteChannel = static_cast<uint8_t>(excite - 1);
   m_status.loopReturnChannel = static_cast<uint8_t>(ret - 1);
-  m_status.loopMonitorEnabled = true;
+  m_status.loopMode = AdcLoopMode::MANUAL;
 
   std::string response =
       std::to_string(excite) + "," + std::to_string(ret) + _buildOverdriveSuffix();
   return buildOkResponse(response);
+}
+
+std::string CommandHandler::_handleBoardAdcProtect(const ParsedCommand& cmd)
+{
+  static const char* const c_Usage = "Usage: BOARD:ADC:PROTECT ON | OFF";
+
+  std::string error;
+  if (!_requireBoard(error))
+    return error;
+
+  if (cmd.args.empty())
+  {
+    if (!cmd.isQuery)
+    {
+      return buildErrorResponse(ResponseStatus::ERR_SYNTAX, c_Usage);
+    }
+    return buildOkResponse(m_status.adcProtectEnabled ? "ON" : "OFF");
+  }
+
+  std::string arg0;
+  if (cmd.args.size() != 1 || !cmd.getArgString(0, arg0))
+  {
+    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, c_Usage);
+  }
+  std::transform(arg0.begin(), arg0.end(), arg0.begin(), ::toupper);
+
+  if (arg0 == "ON")
+  {
+    m_status.adcProtectEnabled = true;
+  }
+  else if (arg0 == "OFF")
+  {
+    m_status.adcProtectEnabled = false;
+  }
+  else
+  {
+    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, c_Usage);
+  }
+
+  return buildOkResponse(arg0 + _buildOverdriveSuffix());
+}
+
+std::string CommandHandler::_handleBoardAdcSampleGain(const ParsedCommand& cmd)
+{
+  static const char* const c_Usage = "Usage: BOARD:ADC:SAMPLEGAIN <factor>";
+
+  std::string error;
+  if (!_requireBoard(error))
+    return error;
+
+  if (cmd.args.empty())
+  {
+    if (!cmd.isQuery)
+    {
+      return buildErrorResponse(ResponseStatus::ERR_SYNTAX, c_Usage);
+    }
+    std::ostringstream oss;
+    oss << m_status.adcSampleGain;
+    return buildOkResponse(oss.str());
+  }
+
+  float sampleGain;
+  if (cmd.args.size() != 1 || !cmd.getArgFloat(0, sampleGain))
+  {
+    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, c_Usage);
+  }
+  if (sampleGain < InputSafety::MIN_SAMPLE_GAIN || sampleGain > InputSafety::MAX_SAMPLE_GAIN)
+  {
+    std::ostringstream oss;
+    oss << "factor must be " << InputSafety::MIN_SAMPLE_GAIN << " to "
+        << InputSafety::MAX_SAMPLE_GAIN;
+    return buildErrorResponse(ResponseStatus::ERR_PARAM, oss.str());
+  }
+
+  m_status.adcSampleGain = sampleGain;
+
+  std::ostringstream oss;
+  oss << sampleGain << _buildOverdriveSuffix();
+  return buildOkResponse(oss.str());
 }
 
 std::string CommandHandler::_handleBoardReset(const ParsedCommand& cmd)
@@ -491,10 +600,7 @@ std::string CommandHandler::_handleBoardReset(const ParsedCommand& cmd)
   }
 
   // The board firmware sets all gains back to x1 and disconnects the mux
-  for (auto& cachedGain : m_channelGains)
-  {
-    cachedGain = GainSetting::GAIN_1;
-  }
+  _resetBoardCache();
   const std::string warn = _buildOverdriveSuffix();
   return buildOkResponse(std::string("Board reset complete") + warn);
 }
@@ -512,6 +618,9 @@ std::string CommandHandler::_handleBoardStatus(const ParsedCommand& cmd)
   {
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, m_board->getLastError());
   }
+
+  // Resync the cache with the real board state
+  _refreshBoardCacheFromStatus(boardStatus);
 
   return buildOkResponse(boardStatus);
 }
@@ -574,6 +683,9 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
   }
 
   if (!_validateNyquist(centerHz + bandwidthHz / 2.0, dec, error))
+    return error;
+
+  if (!_checkAdcProtection(amplitude, error))
     return error;
 
   if (_applyDecimation(dec, error) <= 0.0)
@@ -719,6 +831,9 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_PARAM, oss.str());
   }
   size_t numPoints = static_cast<size_t>(pointsEstimate);
+
+  if (!_checkAdcProtection(amplitude, error))
+    return error;
 
   const double samplingFreq = _applyDecimation(dec, error);
   if (samplingFreq <= 0.0)
@@ -946,25 +1061,155 @@ double CommandHandler::_applyDecimation(uint16_t dec, std::string& errorResponse
   return samplingFreq;
 }
 
+float CommandHandler::_loopPeak(float amplitude, uint8_t exciteChannel,
+                                uint8_t returnChannel) const
+{
+  // Excited input routed straight to the ADC: one gain stage
+  if (exciteChannel == returnChannel)
+  {
+    return InputSafety::boardDrivePeak(amplitude, m_channelGains[exciteChannel]);
+  }
+  return InputSafety::estimateAdcPeak(amplitude, m_channelGains[exciteChannel],
+                                      m_channelGains[returnChannel], m_status.adcSampleGain);
+}
+
+CommandHandler::AdcLoopEstimate CommandHandler::_estimateAdcLoop(float amplitude) const
+{
+  AdcLoopEstimate estimate{false, false, true, 0, 0, 0.0f};
+
+  if (m_status.loopMode == AdcLoopMode::OFF || !m_status.boardConnected)
+  {
+    return estimate;
+  }
+  estimate.active = true;
+
+  if (m_status.loopMode == AdcLoopMode::MANUAL)
+  {
+    estimate.exciteChannel = m_status.loopExciteChannel;
+    estimate.returnChannel = m_status.loopReturnChannel;
+    estimate.peak = _loopPeak(amplitude, estimate.exciteChannel, estimate.returnChannel);
+    return estimate;
+  }
+
+  // AUTO: excitation on the DAC link input, return = input routed to the ADC link output
+  estimate.exciteChannel = InputSafety::DAC_LINK_INPUT;
+
+  if (!m_muxRoutingKnown[InputSafety::ADC_LINK_OUTPUT])
+  {
+    // Unknown routing: assume the worst input
+    estimate.returnKnown = false;
+    for (uint8_t channel = 0; channel < IElectronicBoard::NUM_CHANNELS; ++channel)
+    {
+      const float peak = _loopPeak(amplitude, estimate.exciteChannel, channel);
+      if (peak >= estimate.peak)
+      {
+        estimate.peak = peak;
+        estimate.returnChannel = channel;
+      }
+    }
+    return estimate;
+  }
+
+  const uint8_t routedInput = m_muxRouting[InputSafety::ADC_LINK_OUTPUT];
+  if (routedInput >= IElectronicBoard::NUM_CHANNELS)
+  {
+    estimate.returnOpen = true;
+    return estimate;
+  }
+
+  estimate.returnChannel = routedInput;
+  estimate.peak = _loopPeak(amplitude, estimate.exciteChannel, estimate.returnChannel);
+  return estimate;
+}
+
+std::string CommandHandler::_describeOverdrive(const AdcLoopEstimate& estimate,
+                                               float amplitude) const
+{
+  const GainSetting exciteGain = m_channelGains[estimate.exciteChannel];
+  const GainSetting returnGain = m_channelGains[estimate.returnChannel];
+  const bool direct = estimate.exciteChannel == estimate.returnChannel;
+  const int exciteLabel = static_cast<int>(estimate.exciteChannel + 1);
+  const int returnLabel = static_cast<int>(estimate.returnChannel + 1);
+  const float sampleGain = m_status.adcSampleGain;
+
+  std::ostringstream oss;
+  oss << std::fixed << std::setprecision(2) << "expected ADC peak ~" << estimate.peak
+      << " V exceeds " << InputSafety::ADC_FULL_SCALE << " V full scale";
+  if (!estimate.returnKnown)
+  {
+    oss << " (board routing unknown, worst case assumed)";
+  }
+  if (!direct && sampleGain != 1.0f)
+  {
+    oss << std::defaultfloat << std::setprecision(6) << " at sample gain " << sampleGain
+        << std::fixed;
+  }
+
+  // Rounded down so the advice never exceeds the limit
+  float gainProduct = InputSafety::DAC_FULL_SCALE * IElectronicBoard::gainFactor(exciteGain);
+  if (!direct)
+  {
+    gainProduct *= sampleGain * IElectronicBoard::gainFactor(returnGain);
+  }
+  const float maxAmplitude =
+      std::floor(InputSafety::ADC_FULL_SCALE / gainProduct * 10000.0f) / 10000.0f;
+  oss << std::setprecision(4);
+
+  GainSetting safeGain = GainSetting::GAIN_1;
+  if (direct)
+  {
+    if (InputSafety::maxSafeDirectGain(amplitude, safeGain))
+    {
+      oss << "; suggested: BOARD:GAIN " << exciteLabel << ","
+          << static_cast<int>(IElectronicBoard::gainToIndex(safeGain))
+          << " or excitation amplitude <= " << maxAmplitude;
+    }
+    else
+    {
+      oss << "; reduce excitation amplitude to <= " << maxAmplitude;
+    }
+  }
+  else if (InputSafety::maxSafeReturnGain(amplitude, exciteGain, safeGain, sampleGain))
+  {
+    oss << "; suggested: BOARD:GAIN " << returnLabel << ","
+        << static_cast<int>(IElectronicBoard::gainToIndex(safeGain));
+  }
+  else if (InputSafety::maxSafeExciteGain(amplitude, returnGain, safeGain, sampleGain))
+  {
+    oss << "; suggested: BOARD:GAIN " << exciteLabel << ","
+        << static_cast<int>(IElectronicBoard::gainToIndex(safeGain))
+        << " or excitation amplitude <= " << maxAmplitude;
+  }
+  else
+  {
+    oss << "; reduce excitation amplitude to <= " << maxAmplitude;
+  }
+  return oss.str();
+}
+
+bool CommandHandler::_checkAdcProtection(float amplitude, std::string& errorResponse) const
+{
+  if (!m_status.adcProtectEnabled)
+  {
+    return true;
+  }
+
+  const AdcLoopEstimate estimate = _estimateAdcLoop(amplitude);
+  if (!estimate.active || estimate.peak <= InputSafety::ADC_FULL_SCALE)
+  {
+    return true;
+  }
+
+  errorResponse = buildErrorResponse(ResponseStatus::ERR_PARAM,
+                                     "ADC overdrive: " + _describeOverdrive(estimate, amplitude) +
+                                         "; BOARD:ADC:PROTECT OFF overrides");
+  return false;
+}
+
 bool CommandHandler::_updateAdcOverdriveEstimate()
 {
-  if (!m_status.loopMonitorEnabled || !m_status.boardConnected)
-  {
-    m_status.adcOverdrive = false;
-    return false;
-  }
-
-  const size_t excite = m_status.loopExciteChannel;
-  const size_t ret = m_status.loopReturnChannel;
-  if (excite >= IElectronicBoard::NUM_CHANNELS || ret >= IElectronicBoard::NUM_CHANNELS)
-  {
-    m_status.adcOverdrive = false;
-    return false;
-  }
-
-  const float peak = InputSafety::estimateAdcPeak(
-      m_lastExcitationAmplitude, m_channelGains[excite], m_channelGains[ret]);
-  m_status.adcOverdrive = peak > InputSafety::ADC_FULL_SCALE;
+  const AdcLoopEstimate estimate = _estimateAdcLoop(m_lastExcitationAmplitude);
+  m_status.adcOverdrive = estimate.active && estimate.peak > InputSafety::ADC_FULL_SCALE;
   return m_status.adcOverdrive;
 }
 
@@ -974,52 +1219,23 @@ std::string CommandHandler::_buildOverdriveSuffix()
   {
     return "";
   }
-
-  const size_t excite = m_status.loopExciteChannel;
-  const size_t ret = m_status.loopReturnChannel;
-  const GainSetting exciteGain = m_channelGains[excite];
-  const GainSetting returnGain = m_channelGains[ret];
-  const float peak = InputSafety::estimateAdcPeak(m_lastExcitationAmplitude, exciteGain,
-                                                  returnGain);
-
-  std::ostringstream oss;
-  oss << " WARN: expected ADC peak ~" << std::fixed << std::setprecision(2) << peak
-      << " V exceeds " << InputSafety::ADC_FULL_SCALE << " V full scale";
-
-  GainSetting safeGain = GainSetting::GAIN_1;
-  if (InputSafety::maxSafeReturnGain(m_lastExcitationAmplitude, exciteGain, safeGain))
-  {
-    oss << "; suggested: BOARD:GAIN " << static_cast<int>(ret + 1) << ","
-        << static_cast<int>(IElectronicBoard::gainToIndex(safeGain));
-  }
-  else
-  {
-    const float maxAmplitude =
-        InputSafety::ADC_FULL_SCALE /
-        (IElectronicBoard::gainFactor(exciteGain) * IElectronicBoard::gainFactor(returnGain));
-
-    GainSetting safeExcite = GainSetting::GAIN_1;
-    if (InputSafety::maxSafeExciteGain(m_lastExcitationAmplitude, returnGain, safeExcite))
-    {
-      oss << "; suggested: BOARD:GAIN " << static_cast<int>(excite + 1) << ","
-          << static_cast<int>(IElectronicBoard::gainToIndex(safeExcite))
-          << " or excitation amplitude <= " << maxAmplitude;
-    }
-    else
-    {
-      oss << "; reduce excitation amplitude to <= " << maxAmplitude;
-    }
-  }
-  return oss.str();
+  const AdcLoopEstimate estimate = _estimateAdcLoop(m_lastExcitationAmplitude);
+  return " WARN: " + _describeOverdrive(estimate, m_lastExcitationAmplitude);
 }
 
-void CommandHandler::_refreshGainCacheFromBoard()
+std::string CommandHandler::_buildOkWithOverdriveWarning()
 {
-  // Seed with the most conservative gain: unknown board state must never
-  // silently weaken the overdrive estimate (fail-safe default)
-  for (auto& cachedGain : m_channelGains)
+  const std::string warn = _buildOverdriveSuffix();
+  return buildOkResponse(warn.empty() ? "" : warn.substr(1));
+}
+
+void CommandHandler::_refreshBoardCacheFromBoard()
+{
+  // Fail-safe seed: unknown gain = x16, unknown routing = worst input
+  for (size_t i = 0; i < IElectronicBoard::NUM_CHANNELS; ++i)
   {
-    cachedGain = GainSetting::GAIN_16;
+    m_channelGains[i] = GainSetting::GAIN_16;
+    m_muxRoutingKnown[i] = false;
   }
 
   if (!m_board)
@@ -1028,27 +1244,82 @@ void CommandHandler::_refreshGainCacheFromBoard()
   }
 
   std::array<GainSetting, IElectronicBoard::NUM_CHANNELS> gains;
-  std::array<bool, IElectronicBoard::NUM_CHANNELS> valid;
+  std::array<bool, IElectronicBoard::NUM_CHANNELS> gainValid;
   // Value-initialize before the call: mocks (and gtest argument printing)
   // may observe the buffers even when the query fails
   gains.fill(GainSetting::GAIN_1);
-  valid.fill(false);
-  if (!m_board->queryGains(gains, valid))
+  gainValid.fill(false);
+  if (m_board->queryGains(gains, gainValid))
   {
-    return; // keep the conservative x16 seed on transport failure
+    for (size_t i = 0; i < IElectronicBoard::NUM_CHANNELS; ++i)
+    {
+      m_channelGains[i] = gainValid[i] ? gains[i] : GainSetting::GAIN_16;
+    }
   }
 
-  for (size_t i = 0; i < IElectronicBoard::NUM_CHANNELS; ++i)
+  std::array<uint8_t, IElectronicBoard::NUM_CHANNELS> routing;
+  std::array<bool, IElectronicBoard::NUM_CHANNELS> routingValid;
+  routing.fill(IElectronicBoard::DISCONNECTED);
+  routingValid.fill(false);
+  if (m_board->queryRouting(routing, routingValid))
   {
-    m_channelGains[i] = valid[i] ? gains[i] : GainSetting::GAIN_16;
+    for (size_t i = 0; i < IElectronicBoard::NUM_CHANNELS; ++i)
+    {
+      m_muxRouting[i] = routing[i];
+      m_muxRoutingKnown[i] = routingValid[i];
+    }
   }
 }
 
-void CommandHandler::_resetGainCache()
+void CommandHandler::_refreshBoardCacheFromStatus(const std::string& statusText)
 {
-  for (auto& cachedGain : m_channelGains)
+  // Take over only what parses; the rest keeps its cached value
+  GainSetting gains[IElectronicBoard::NUM_CHANNELS];
+  bool gainValid[IElectronicBoard::NUM_CHANNELS];
+  for (auto& gain : gains)
   {
-    cachedGain = GainSetting::GAIN_1;
+    gain = GainSetting::GAIN_16;
+  }
+  if (BoardProtocol::parseGainStatus(statusText, gains, gainValid,
+                                     IElectronicBoard::NUM_CHANNELS))
+  {
+    for (size_t i = 0; i < IElectronicBoard::NUM_CHANNELS; ++i)
+    {
+      if (gainValid[i])
+      {
+        m_channelGains[i] = gains[i];
+      }
+    }
+  }
+
+  uint8_t routing[IElectronicBoard::NUM_CHANNELS];
+  bool routingValid[IElectronicBoard::NUM_CHANNELS];
+  for (auto& route : routing)
+  {
+    route = IElectronicBoard::DISCONNECTED;
+  }
+  if (BoardProtocol::parseRoutingStatus(statusText, routing, routingValid,
+                                        IElectronicBoard::NUM_CHANNELS))
+  {
+    for (size_t i = 0; i < IElectronicBoard::NUM_CHANNELS; ++i)
+    {
+      if (routingValid[i])
+      {
+        m_muxRouting[i] = routing[i];
+        m_muxRoutingKnown[i] = true;
+      }
+    }
+  }
+}
+
+void CommandHandler::_resetBoardCache()
+{
+  // Board defaults: unity gains, outputs disconnected
+  for (size_t i = 0; i < IElectronicBoard::NUM_CHANNELS; ++i)
+  {
+    m_channelGains[i] = GainSetting::GAIN_1;
+    m_muxRouting[i] = IElectronicBoard::DISCONNECTED;
+    m_muxRoutingKnown[i] = true;
   }
 }
 
