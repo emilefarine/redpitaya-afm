@@ -525,6 +525,24 @@ class AdcProtectionTests(ClientTestCase):
             client.measure_sinc(200, 100, amplitude=2.0)
         self.assertFalse(ctx.exception.is_adc_overdrive)
 
+    def test_sample_gain_field_and_commands(self):
+        status = SystemStatus.from_response(
+            "HW_INIT=1 BOARD=1 BUSY=0 DEC=64 MODE=FULL LOOP=1,3 OVERDRIVE=0 SAT=0 "
+            "PROTECT=1 SAMPLEGAIN=0.01")
+        self.assertEqual(status.adc_sample_gain, 0.01)
+        self.assertIsNone(SystemStatus.from_response("HW_INIT=1 DEC=64").adc_sample_gain)
+
+        commands = []
+
+        def respond(command, handler):
+            commands.append(command)
+            return "OK 0.01\n"
+
+        client = self.make_client(self.make_server(respond))
+        self.assertEqual(client.set_adc_sample_gain(0.01), "0.01")
+        self.assertEqual(client.get_adc_sample_gain(), 0.01)
+        self.assertEqual(commands, ["BOARD:ADC:SAMPLEGAIN 0.01", "BOARD:ADC:SAMPLEGAIN?"])
+
 
 if __name__ == "__main__":
     unittest.main()

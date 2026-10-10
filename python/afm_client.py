@@ -168,6 +168,7 @@ class SystemStatus:
     adc_overdrive: bool = False     # Predicted peak exceeds the +/-1 V ADC input
     adc_saturated: bool = False     # Saturation detected in the last acquisition
     adc_protect: Optional[bool] = None  # Overdrive refused; None for servers < 2.6.0
+    adc_sample_gain: Optional[float] = None  # Declared return / excitation ratio of the sample
 
     @classmethod
     def from_response(cls, response: str) -> 'SystemStatus':
@@ -202,6 +203,11 @@ class SystemStatus:
                     status.adc_saturated = value == '1'
                 elif key == 'PROTECT':
                     status.adc_protect = value == '1'
+                elif key == 'SAMPLEGAIN':
+                    try:
+                        status.adc_sample_gain = float(value)
+                    except ValueError:
+                        pass
 
         return status
 
@@ -732,6 +738,22 @@ class AFMClient:
     def get_adc_protect(self) -> bool:
         """True when overdriving measurements are refused (BOARD:ADC:PROTECT?)"""
         return self.send_command("BOARD:ADC:PROTECT?") == "ON"
+
+    def set_adc_sample_gain(self, gain: float) -> str:
+        """
+        Declare the expected return / excitation ratio of the sample (default 1).
+
+        Below 1 for a weak return signal that needs a high return gain.
+        """
+        return self.send_command(f"BOARD:ADC:SAMPLEGAIN {gain}")
+
+    def get_adc_sample_gain(self) -> float:
+        """Declared sample gain (BOARD:ADC:SAMPLEGAIN?)"""
+        response = self.send_command("BOARD:ADC:SAMPLEGAIN?")
+        try:
+            return float(response)
+        except ValueError:
+            raise AFMProtocolError(f"Unexpected sample gain: {response}")
 
     def get_board_status(self) -> str:
         """Get electronic board status as a multi-line text block."""

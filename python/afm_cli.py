@@ -118,6 +118,8 @@ class AFMShell(cmd.Cmd):
             print(f"  ADC Saturated:        {status.adc_saturated}")
             protect = {True: "ON", False: "OFF (overridden)", None: "n/a (server < 2.6)"}
             print(f"  ADC Protection:       {protect[status.adc_protect]}")
+            if status.adc_sample_gain is not None:
+                print(f"  ADC Sample Gain:      {status.adc_sample_gain:g}")
         except AFMError as e:
             print(f"Error: {e}")
 
@@ -295,11 +297,29 @@ class AFMShell(cmd.Cmd):
         except AFMError as e:
             print(f"Error: {e}")
 
+    def do_adc_sample_gain(self, arg):
+        """Expected return / excitation ratio of the sample: adc_sample_gain [factor]"""
+        hint = self._board_unavailable_hint()
+        if hint:
+            print(hint)
+            return
+        try:
+            if not arg.strip():
+                print(f"  ADC Sample Gain: {self.client.get_adc_sample_gain():g}")
+            else:
+                result = self.client.set_adc_sample_gain(float(arg.strip()))
+                print(f"OK: {result}")
+        except ValueError:
+            print("Usage: adc_sample_gain [factor]  (e.g. 0.01 for a weak return signal)")
+        except AFMError as e:
+            print(f"Error: {e}")
+
     @staticmethod
     def _print_measure_error(error: AFMError):
         print(f"\nError: {error}")
         if getattr(error, "is_adc_overdrive", False):
-            print("  Not run. Use 'adc_protect off' to override.")
+            print("  Not run. Lower 'adc_sample_gain' if the return signal is weak,")
+            print("  or use 'adc_protect off' to override.")
 
     # ------ Measurement Commands ------
 
@@ -483,6 +503,8 @@ Electronic Board:
   adc_loop off            Disable the ADC input monitor (BOARD:ADC:LOOP)
   adc_protect [on|off]    Refuse measurements that would overdrive the
                           +/-1 V ADC input (BOARD:ADC:PROTECT, default on)
+  adc_sample_gain [x]     Expected return / excitation ratio of the sample
+                          (BOARD:ADC:SAMPLEGAIN, default 1)
   board_reset             Reset board (BOARD:RESET)
   board_status            Show board status (BOARD:STATUS?)
 

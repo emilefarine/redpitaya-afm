@@ -135,6 +135,21 @@ class AdcProtectionTests(unittest.TestCase):
             self.assertIn("ADC overdrive", output)
             self.assertIn("adc_protect off", output)
 
+    def test_adc_sample_gain_query_set_and_invalid(self):
+        commands = []
+
+        def respond(command, handler):
+            commands.append(command)
+            if command.startswith("SYSTEM:STATUS"):
+                return self.STATUS
+            return "OK 0.01\n"
+
+        shell = self.make_shell(respond)
+        self.assertIn("ADC Sample Gain: 0.01", self.run_command(shell, "do_adc_sample_gain"))
+        self.assertIn("OK: 0.01", self.run_command(shell, "do_adc_sample_gain", "0.01"))
+        self.assertIn("BOARD:ADC:SAMPLEGAIN 0.01", commands)
+        self.assertIn("Usage", self.run_command(shell, "do_adc_sample_gain", "weak"))
+
 
 if __name__ == "__main__":
     unittest.main()

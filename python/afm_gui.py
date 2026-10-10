@@ -261,6 +261,7 @@ class AFMMainWindow(QMainWindow):
         self._closing = False
         self.board_available = False
         self._controls_enabled = False
+        self._sample_gain = 1.0
 
         # Display-scaled data (units may differ from wire-format units)
         self._freq_display: np.ndarray = np.array([], dtype=np.float64)
@@ -456,6 +457,19 @@ class AFMMainWindow(QMainWindow):
             "Refuse measurements predicted to exceed the +/-1 V Red Pitaya input.")
         self.adc_protect_check.toggled.connect(self._on_adc_protect_toggled)
         layout.addWidget(self.adc_protect_check, 9, 0, 1, 2)
+
+        layout.addWidget(QLabel("Sample gain"), 10, 0)
+        self.sample_gain_spin = QDoubleSpinBox()
+        self.sample_gain_spin.setDecimals(6)
+        self.sample_gain_spin.setRange(1e-6, 1000.0)
+        self.sample_gain_spin.setValue(1.0)
+        self.sample_gain_spin.setStepType(
+            QDoubleSpinBox.StepType.AdaptiveDecimalStepType)
+        self.sample_gain_spin.setToolTip(
+            "Expected return / excitation ratio of the sample. "
+            "Below 1 for a weak return signal.")
+        self.sample_gain_spin.editingFinished.connect(self._on_sample_gain_edited)
+        layout.addWidget(self.sample_gain_spin, 10, 1)
 
         return grp
 
@@ -788,12 +802,30 @@ class AFMMainWindow(QMainWindow):
             tips.append("Predicted peak above +/-1 V: lower the return gain or the amplitude.")
         if status.adc_loop:
             tips.append(f"Monitored loop (excite,return): {status.adc_loop}")
+        if status.adc_sample_gain is not None:
+            tips.append(f"Sample gain: {status.adc_sample_gain:g}")
+            self._sample_gain = status.adc_sample_gain
+            self.sample_gain_spin.blockSignals(True)
+            self.sample_gain_spin.setValue(status.adc_sample_gain)
+            self.sample_gain_spin.blockSignals(False)
         self.adc_status_label.setToolTip("\n".join(tips))
 
         if status.adc_protect is not None:
             self.adc_protect_check.blockSignals(True)
             self.adc_protect_check.setChecked(status.adc_protect)
             self.adc_protect_check.blockSignals(False)
+
+    def _on_sample_gain_edited(self):
+        value = self.sample_gain_spin.value()
+        if value == self._sample_gain:
+            return
+        try:
+            self.client.set_adc_sample_gain(value)
+            self.statusBar().showMessage(f"Sample gain set to {value:g}")
+        except AFMError as exc:
+            self._sync_connection_ui()
+            self.statusBar().showMessage(f"Sample gain error: {exc}")
+        self._on_refresh_status()
 
     def _on_adc_protect_toggled(self, checked: bool):
         if not checked:
@@ -1007,7 +1039,8 @@ class AFMMainWindow(QMainWindow):
             self.statusBar().showMessage("Measurement refused: ADC overdrive")
             QMessageBox.warning(
                 self, "Measurement refused",
-                f"{msg}\n\nNot run. Untick \"ADC protection\" to override.")
+                f"{msg}\n\nNot run. Lower \"Sample gain\" if the return signal is weak, "
+                "or untick \"ADC protection\" to override.")
             return
         self.statusBar().showMessage(f"Measurement error: {msg}")
         QMessageBox.critical(self, "Measurement Error", msg)

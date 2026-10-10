@@ -237,6 +237,31 @@ class GuiSmokeTests(unittest.TestCase):
             self.assertFalse(self.window.adc_protect_check.isChecked())
             self.assertIn("protection OFF", self.window.adc_status_label.text())
 
+    def test_sample_gain_follows_status_and_is_sent_when_edited(self):
+        commands = []
+
+        def respond(command, handler):
+            commands.append(command)
+            if command.startswith("SYSTEM:STATUS"):
+                gain = "0.1" if "BOARD:ADC:SAMPLEGAIN 0.1" in commands else "0.01"
+                return ("OK HW_INIT=1 BOARD=1 BUSY=0 DEC=64 MODE=FULL LOOP=1,3 "
+                        f"OVERDRIVE=0 SAT=0 PROTECT=1 SAMPLEGAIN={gain}\n")
+            return "OK 0.1\n"
+
+        self.connect_window(respond)
+        self.window._on_refresh_status()
+        self.assertAlmostEqual(self.window.sample_gain_spin.value(), 0.01)
+        self.assertIn("Sample gain: 0.01", self.window.adc_status_label.toolTip())
+
+        # Unchanged value: nothing sent
+        self.window.sample_gain_spin.editingFinished.emit()
+        self.assertFalse(any("SAMPLEGAIN" in c for c in commands))
+
+        self.window.sample_gain_spin.setValue(0.1)
+        self.window.sample_gain_spin.editingFinished.emit()
+        self.assertIn("BOARD:ADC:SAMPLEGAIN 0.1", commands)
+        self.assertAlmostEqual(self.window.sample_gain_spin.value(), 0.1)
+
     def test_refused_measurement_shows_overdrive_dialog(self):
         from unittest import mock
 
