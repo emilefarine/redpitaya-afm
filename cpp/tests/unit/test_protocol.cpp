@@ -333,5 +333,18 @@ TEST(ProtocolTest, ServerConfigConstants)
 
 TEST(ProtocolTest, VersionInfoToString)
 {
-  EXPECT_EQ(VersionInfo::toString(), "2.5.0");
+  EXPECT_EQ(VersionInfo::toString(), "2.6.0");
+}
+
+TEST(ProtocolTest, ParsesAdcProtectCommand)
+{
+  ParsedCommand set = parseLine("BOARD:ADC:PROTECT OFF");
+  EXPECT_EQ(set.command, Command::BOARD_ADC_PROTECT);
+  EXPECT_FALSE(set.isQuery);
+  ASSERT_EQ(set.args.size(), 1u);
+  EXPECT_EQ(set.args[0], "OFF");
+
+  ParsedCommand query = parseLine("board:adc:protect?");
+  EXPECT_EQ(query.command, Command::BOARD_ADC_PROTECT);
+  EXPECT_TRUE(query.isQuery);
 }
