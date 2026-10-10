@@ -462,5 +462,69 @@ class OperatingModeTests(ClientTestCase):
                          "Electronic board disabled (RP-only mode)")
 
 
+class AdcProtectionTests(ClientTestCase):
+    STATUS = ("OK HW_INIT=1 BOARD=1 BUSY=0 DEC=64 MODE=FULL LOOP=1,X "
+              "OVERDRIVE=0 SAT=0 PROTECT=1\n")
+
+    def test_protect_field_is_parsed(self):
+        status = SystemStatus.from_response(self.STATUS[3:].strip())
+        self.assertIs(status.adc_protect, True)
+        self.assertEqual(status.adc_loop, "1,X")
+
+        overridden = SystemStatus.from_response(
+            "HW_INIT=1 BOARD=1 BUSY=0 DEC=64 MODE=FULL LOOP=1,3 OVERDRIVE=1 SAT=0 PROTECT=0")
+        self.assertIs(overridden.adc_protect, False)
+
+    def test_protect_is_unknown_for_older_servers(self):
+        status = SystemStatus.from_response(
+            "HW_INIT=1 BOARD=1 BUSY=0 DEC=64 MODE=FULL LOOP=OFF OVERDRIVE=0 SAT=0")
+        self.assertIsNone(status.adc_protect)
+
+    def test_protect_and_loop_commands(self):
+        commands = []
+
+        def respond(command, handler):
+            commands.append(command)
+            replies = {
+                "BOARD:ADC:PROTECT OFF": "OK OFF WARN: expected ADC peak ~2.00 V\n",
+                "BOARD:ADC:PROTECT ON": "OK ON\n",
+                "BOARD:ADC:PROTECT?": "OK ON\n",
+                "BOARD:ADC:LOOP AUTO": "OK AUTO\n",
+            }
+            return replies.get(command, "ERR_SYNTAX: unexpected\n")
+
+        client = self.make_client(self.make_server(respond))
+        self.assertTrue(client.set_adc_protect(False).startswith("OFF WARN:"))
+        self.assertEqual(client.set_adc_protect(True), "ON")
+        self.assertTrue(client.get_adc_protect())
+        self.assertEqual(client.set_adc_loop_auto(), "AUTO")
+        self.assertEqual(commands, ["BOARD:ADC:PROTECT OFF", "BOARD:ADC:PROTECT ON",
+                                    "BOARD:ADC:PROTECT?", "BOARD:ADC:LOOP AUTO"])
+
+    def test_refused_measurement_is_flagged_as_overdrive(self):
+        refusal = ("ERR_PARAM: ADC overdrive: expected ADC peak ~2.00 V exceeds 1.00 V "
+                   "full scale; suggested: BOARD:GAIN 3,2; BOARD:ADC:PROTECT OFF overrides\n")
+        client = self.make_client(self.make_server(lambda command, handler: refusal))
+
+        with self.assertRaises(AFMCommandError) as ctx:
+            client.measure_sinc(200, 100)
+        self.assertEqual(ctx.exception.status, "ERR_PARAM")
+        self.assertTrue(ctx.exception.is_adc_overdrive)
+        # A refusal keeps the connection usable
+        self.assertTrue(client.is_connected)
+
+        with self.assertRaises(AFMCommandError) as ctx:
+            client.measure_sweep(200, 10)
+        self.assertTrue(ctx.exception.is_adc_overdrive)
+
+    def test_other_errors_are_not_flagged_as_overdrive(self):
+        client = self.make_client(self.make_server(
+            lambda command, handler: "ERR_PARAM: amplitude must be in ]0, 1]\n"))
+
+        with self.assertRaises(AFMCommandError) as ctx:
+            client.measure_sinc(200, 100, amplitude=2.0)
+        self.assertFalse(ctx.exception.is_adc_overdrive)
+
+
 if __name__ == "__main__":
     unittest.main()

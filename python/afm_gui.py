@@ -365,6 +365,14 @@ class AFMMainWindow(QMainWindow):
             layout.addWidget(val, i, 1)
             self.status_values.append(val)
 
+        # Persistent ADC input state
+        adc_row = len(labels)
+        layout.addWidget(QLabel("ADC Input"), adc_row, 0)
+        self.adc_status_label = QLabel("N/A")
+        self.adc_status_label.setStyleSheet(f"color: {TEXT_DIM};")
+        self.adc_status_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(self.adc_status_label, adc_row, 1)
+
         status_btns = QHBoxLayout()
         self.init_hw_btn = QPushButton("Init HW")
         self.init_hw_btn.clicked.connect(self._on_init_hw)
@@ -374,7 +382,7 @@ class AFMMainWindow(QMainWindow):
         self.refresh_status_btn.clicked.connect(self._on_refresh_status)
         status_btns.addWidget(self.refresh_status_btn)
 
-        layout.addLayout(status_btns, len(labels), 0, 1, 2)
+        layout.addLayout(status_btns, adc_row + 1, 0, 1, 2)
 
         return grp
 
@@ -441,6 +449,13 @@ class AFMMainWindow(QMainWindow):
         self.schematic_btn = QPushButton("Open Routing Schematic")
         self.schematic_btn.clicked.connect(self._on_open_schematic)
         layout.addWidget(self.schematic_btn, 8, 0, 1, 2)
+
+        self.adc_protect_check = QCheckBox("ADC protection (refuse overdrive)")
+        self.adc_protect_check.setChecked(True)
+        self.adc_protect_check.setToolTip(
+            "Refuse measurements predicted to exceed the +/-1 V Red Pitaya input.")
+        self.adc_protect_check.toggled.connect(self._on_adc_protect_toggled)
+        layout.addWidget(self.adc_protect_check, 9, 0, 1, 2)
 
         return grp
 
@@ -702,6 +717,9 @@ class AFMMainWindow(QMainWindow):
             self.conn_label.setStyleSheet(f"background: transparent; color: {RED}; font-weight: bold;")
             self.board_available = False
             self.board_panel.setToolTip("")
+            self.adc_status_label.setText("N/A")
+            self.adc_status_label.setStyleSheet(f"color: {TEXT_DIM};")
+            self.adc_status_label.setToolTip("")
 
         self._set_controls_enabled(connected)
 
@@ -742,6 +760,62 @@ class AFMMainWindow(QMainWindow):
         self.board_panel.setToolTip(reason)
         self.schematic_btn.setToolTip(reason)
 
+    def _update_adc_indicator(self, status):
+        """Show the ADC input state and keep the protection checkbox in sync."""
+        parts = []
+        color = GREEN
+        if status.adc_saturated:
+            parts.append("SATURATED")
+            color = RED
+        if status.adc_overdrive:
+            parts.append("overdrive risk")
+            color = RED if status.adc_saturated else AMBER
+        if status.adc_protect is False:
+            parts.append("protection OFF")
+            if color == GREEN:
+                color = AMBER
+        if not parts:
+            parts.append("OK" if status.adc_loop else "not monitored")
+            if not status.adc_loop:
+                color = TEXT_DIM
+        self.adc_status_label.setText(", ".join(parts))
+        self.adc_status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+
+        tips = []
+        if status.adc_saturated:
+            tips.append("The last acquisition was clipped at the +/-1 V input.")
+        if status.adc_overdrive:
+            tips.append("Predicted peak above +/-1 V: lower the return gain or the amplitude.")
+        if status.adc_loop:
+            tips.append(f"Monitored loop (excite,return): {status.adc_loop}")
+        self.adc_status_label.setToolTip("\n".join(tips))
+
+        if status.adc_protect is not None:
+            self.adc_protect_check.blockSignals(True)
+            self.adc_protect_check.setChecked(status.adc_protect)
+            self.adc_protect_check.blockSignals(False)
+
+    def _on_adc_protect_toggled(self, checked: bool):
+        if not checked:
+            reply = QMessageBox.question(
+                self, "Override ADC protection",
+                "Overdriving measurements will no longer be refused and can damage "
+                "the Red Pitaya input.\n\nOverride?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply != QMessageBox.StandardButton.Yes:
+                self.adc_protect_check.blockSignals(True)
+                self.adc_protect_check.setChecked(True)
+                self.adc_protect_check.blockSignals(False)
+                return
+        try:
+            self.client.set_adc_protect(checked)
+            self.statusBar().showMessage(
+                "ADC protection enabled" if checked else "ADC protection overridden")
+        except AFMError as exc:
+            self._sync_connection_ui()
+            self.statusBar().showMessage(f"ADC protection error: {exc}")
+        self._on_refresh_status()
+
     def _sync_connection_ui(self):
         """Reflect the offline state if a command lost the connection."""
         if not self.client.is_connected:
@@ -778,17 +852,7 @@ class AFMMainWindow(QMainWindow):
                 val_lbl.setText(icon)
                 val_lbl.setStyleSheet(f"color: {color}; font-weight: bold;")
             self._update_board_controls(status)
-
-            warnings = []
-            if status.adc_overdrive:
-                warnings.append("ADC overdrive risk: lower the return channel PGA gain "
-                                "or the excitation amplitude")
-            if status.adc_saturated:
-                warnings.append("ADC input saturated: the last acquisition was clipped")
-            if warnings:
-                self.statusBar().showMessage(" | ".join(warnings))
-            else:
-                self.statusBar().clearMessage()
+            self._update_adc_indicator(status)
         except AFMBusyError:
             self.statusBar().showMessage("Status refresh skipped: client busy")
         except AFMError as exc:
@@ -939,6 +1003,12 @@ class AFMMainWindow(QMainWindow):
         # next click reconnects instead of pretending we are still connected.
         self._update_connection_ui(self.client.is_connected)
         self.measure_btn.setText("▶  Measure")
+        if "ADC overdrive" in msg:
+            self.statusBar().showMessage("Measurement refused: ADC overdrive")
+            QMessageBox.warning(
+                self, "Measurement refused",
+                f"{msg}\n\nNot run. Untick \"ADC protection\" to override.")
+            return
         self.statusBar().showMessage(f"Measurement error: {msg}")
         QMessageBox.critical(self, "Measurement Error", msg)
 
