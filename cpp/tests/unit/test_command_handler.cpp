@@ -1573,4 +1573,90 @@ TEST_F(CommandHandlerTest, RefusedMeasurementKeepsSaturationEvidence)
   EXPECT_NE(send("SYSTEM:STATUS?").find("SAT=1"), std::string::npos);
 }
 
+TEST_F(CommandHandlerTest, SampleGainDefaultsToOneAndIsReported)
+{
+  initHardware(true);
+
+  EXPECT_EQ(send("BOARD:ADC:SAMPLEGAIN?"), "OK 1\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("SAMPLEGAIN=1"), std::string::npos);
+
+  EXPECT_EQ(send("BOARD:ADC:SAMPLEGAIN 0.01"), "OK 0.01\n");
+  EXPECT_EQ(send("BOARD:ADC:SAMPLEGAIN?"), "OK 0.01\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("SAMPLEGAIN=0.01"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, SampleGainAllowsHighReturnGainForWeakSignals)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(1024);
+  allowBoardCommands();
+  EXPECT_EQ(send("BOARD:MUX:ROUTE 1,3"), "OK\n");
+
+  // Unity sample assumed: x16 on the return channel is refused
+  EXPECT_NE(send("BOARD:GAIN 3,7").find("WARN"), std::string::npos);
+  EXPECT_NE(send("MEASURE:SINC 200,100,1024,64,1").find("ADC overdrive"), std::string::npos);
+
+  // Declared 1% return: 1.0 x 0.01 x 16 = 0.16 V
+  EXPECT_EQ(send("BOARD:ADC:SAMPLEGAIN 0.01"), "OK 0.01\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("OVERDRIVE=0"), std::string::npos);
+  EXPECT_EQ(send("MEASURE:SINC 200,100,1024,64,1").compare(0, 3, "OK "), 0);
+}
+
+TEST_F(CommandHandlerTest, SampleGainAboveOneTightensTheLimit)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(1024);
+  allowBoardCommands();
+  EXPECT_EQ(send("BOARD:MUX:ROUTE 1,3"), "OK\n");
+  EXPECT_EQ(send("MEASURE:SINC 200,100,1024,64,1").compare(0, 3, "OK "), 0);
+
+  std::string resp = send("BOARD:ADC:SAMPLEGAIN 4");
+  EXPECT_EQ(resp.compare(0, 5, "OK 4 "), 0) << resp;
+  EXPECT_NE(resp.find("~4.00 V"), std::string::npos);
+  EXPECT_NE(resp.find("at sample gain 4"), std::string::npos);
+  EXPECT_NE(resp.find("suggested: BOARD:GAIN 3,1"), std::string::npos);
+
+  EXPECT_NE(send("MEASURE:SINC 200,100,1024,64,1").find("ADC overdrive"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, SampleGainDoesNotApplyToDirectRoute)
+{
+  initHardware(true);
+  allowBoardCommands();
+  EXPECT_EQ(send("BOARD:ADC:SAMPLEGAIN 0.001"), "OK 0.001\n");
+
+  // IN1 straight to the ADC bypasses the sample
+  EXPECT_EQ(send("BOARD:MUX:ROUTE 1,1"), "OK\n");
+  std::string resp = send("BOARD:GAIN 1,4");
+  EXPECT_NE(resp.find("~2.00 V"), std::string::npos) << resp;
+  EXPECT_EQ(resp.find("sample gain"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, SampleGainRejectsInvalidArguments)
+{
+  EXPECT_NE(send("BOARD:ADC:SAMPLEGAIN 0.5").find("ERR_NOT_INIT"), std::string::npos);
+
+  initHardware(true);
+  EXPECT_NE(send("BOARD:ADC:SAMPLEGAIN").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("BOARD:ADC:SAMPLEGAIN abc").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("BOARD:ADC:SAMPLEGAIN nan").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("BOARD:ADC:SAMPLEGAIN 1,2").find("ERR_SYNTAX"), std::string::npos);
+  EXPECT_NE(send("BOARD:ADC:SAMPLEGAIN 0").find("ERR_PARAM"), std::string::npos);
+  EXPECT_NE(send("BOARD:ADC:SAMPLEGAIN -1").find("ERR_PARAM"), std::string::npos);
+  EXPECT_NE(send("BOARD:ADC:SAMPLEGAIN 1e9").find("ERR_PARAM"), std::string::npos);
+
+  // Rejected values leave the setting untouched
+  EXPECT_EQ(send("BOARD:ADC:SAMPLEGAIN?"), "OK 1\n");
+}
+
+TEST_F(CommandHandlerTest, SampleGainIsResetByRst)
+{
+  initHardware(true);
+  EXPECT_EQ(send("BOARD:ADC:SAMPLEGAIN 0.01"), "OK 0.01\n");
+
+  EXPECT_EQ(send("*RST"), "OK\n");
+  EXPECT_NE(send("SYSTEM:STATUS?").find("SAMPLEGAIN=1"), std::string::npos);
+  EXPECT_EQ(send("SYSTEM:STATUS?").find("SAMPLEGAIN=0.01"), std::string::npos);
+}
+
 } // namespace

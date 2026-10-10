@@ -348,3 +348,15 @@ TEST(ProtocolTest, ParsesAdcProtectCommand)
   EXPECT_EQ(query.command, Command::BOARD_ADC_PROTECT);
   EXPECT_TRUE(query.isQuery);
 }
+
+TEST(ProtocolTest, ParsesAdcSampleGainCommand)
+{
+  ParsedCommand set = parseLine("BOARD:ADC:SAMPLEGAIN 0.01");
+  EXPECT_EQ(set.command, Command::BOARD_ADC_SAMPLEGAIN);
+  ASSERT_EQ(set.args.size(), 1u);
+  float value = 0.0f;
+  EXPECT_TRUE(set.getArgFloat(0, value));
+  EXPECT_FLOAT_EQ(value, 0.01f);
+
+  EXPECT_TRUE(parseLine("BOARD:ADC:SAMPLEGAIN?").isQuery);
+}

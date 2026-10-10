@@ -10,8 +10,9 @@
  * The RP inputs stay on LV (+/-1 V): 6 V absolute maximum, and above 1 kHz the
  * full scale itself is the limit. The board can output about +/-10.5 V.
  *
- * The estimate is nominal: it assumes the AFM returns the excitation
- * unchanged. SaturationDetector reports what actually clipped.
+ * The estimate is nominal: the AFM is assumed to return the excitation
+ * scaled by the declared sample gain (default 1). SaturationDetector reports
+ * what actually clipped.
  */
 namespace InputSafety
 {
@@ -34,6 +35,10 @@ static constexpr uint8_t DAC_LINK_INPUT = 0;
 /** Board output wired to the acquired RP ADC input (OUT1, 0-based) */
 static constexpr uint8_t ADC_LINK_OUTPUT = 0;
 
+/** Accepted range of the sample gain (return / excitation ratio of the AFM) */
+static constexpr float MIN_SAMPLE_GAIN = 1.0e-6f;
+static constexpr float MAX_SAMPLE_GAIN = 1.0e3f;
+
 /**
  * @brief Peak voltage the board can drive towards the AFM
  * @param amplitude Excitation amplitude as a fraction of the DAC full scale
@@ -50,9 +55,11 @@ inline float boardDrivePeak(float amplitude, GainSetting exciteGain)
 }
 
 /** @brief Nominal peak at the ADC input; both gain stages clip at the board rail */
-inline float estimateAdcPeak(float amplitude, GainSetting exciteGain, GainSetting returnGain)
+inline float estimateAdcPeak(float amplitude, GainSetting exciteGain, GainSetting returnGain,
+                             float sampleGain = 1.0f)
 {
-  float peak = boardDrivePeak(amplitude, exciteGain) * IElectronicBoard::gainFactor(returnGain);
+  float peak = boardDrivePeak(amplitude, exciteGain) * sampleGain *
+               IElectronicBoard::gainFactor(returnGain);
   if (peak > BOARD_RAIL_VOLTAGE)
   {
     peak = BOARD_RAIL_VOLTAGE;
@@ -61,9 +68,10 @@ inline float estimateAdcPeak(float amplitude, GainSetting exciteGain, GainSettin
 }
 
 /** @brief True when the nominal peak would exceed the ADC full scale */
-inline bool isOverdrive(float amplitude, GainSetting exciteGain, GainSetting returnGain)
+inline bool isOverdrive(float amplitude, GainSetting exciteGain, GainSetting returnGain,
+                        float sampleGain = 1.0f)
 {
-  return estimateAdcPeak(amplitude, exciteGain, returnGain) > ADC_FULL_SCALE;
+  return estimateAdcPeak(amplitude, exciteGain, returnGain, sampleGain) > ADC_FULL_SCALE;
 }
 
 /**
@@ -78,13 +86,14 @@ inline bool isOverdrive(float amplitude, GainSetting exciteGain, GainSetting ret
  * @param safeGainOut Receives the suggested gain when true is returned
  * @return true if a safe return gain setting exists
  */
-inline bool maxSafeReturnGain(float amplitude, GainSetting exciteGain, GainSetting& safeGainOut)
+inline bool maxSafeReturnGain(float amplitude, GainSetting exciteGain, GainSetting& safeGainOut,
+                              float sampleGain = 1.0f)
 {
   bool found = false;
   for (uint8_t idx = 0; idx <= MAX_GAIN_INDEX; ++idx)
   {
     GainSetting candidate = IElectronicBoard::gainFromIndex(idx);
-    if (isOverdrive(amplitude, exciteGain, candidate))
+    if (isOverdrive(amplitude, exciteGain, candidate, sampleGain))
     {
       break;
     }
@@ -102,13 +111,14 @@ inline bool maxSafeReturnGain(float amplitude, GainSetting exciteGain, GainSetti
  * @param safeGainOut Receives the suggested gain when true is returned
  * @return true if a safe excitation gain setting exists
  */
-inline bool maxSafeExciteGain(float amplitude, GainSetting returnGain, GainSetting& safeGainOut)
+inline bool maxSafeExciteGain(float amplitude, GainSetting returnGain, GainSetting& safeGainOut,
+                              float sampleGain = 1.0f)
 {
   bool found = false;
   for (uint8_t idx = 0; idx <= MAX_GAIN_INDEX; ++idx)
   {
     GainSetting candidate = IElectronicBoard::gainFromIndex(idx);
-    if (isOverdrive(amplitude, candidate, returnGain))
+    if (isOverdrive(amplitude, candidate, returnGain, sampleGain))
     {
       break;
     }

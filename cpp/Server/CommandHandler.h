@@ -37,6 +37,7 @@ struct SystemStatus
   uint8_t loopExciteChannel;    ///< MANUAL only (0-based)
   uint8_t loopReturnChannel;    ///< MANUAL only (0-based)
   bool adcProtectEnabled;       ///< Refuse MEASURE predicted to overdrive
+  float adcSampleGain;          ///< Expected return / excitation ratio of the AFM
   bool adcOverdrive;            ///< Estimate exceeds ADC full scale
   bool adcSaturated;            ///< Saturation detected in the last acquisition
   float adcSaturationRatio;     ///< Fraction of saturated samples (last acquisition)
@@ -51,6 +52,7 @@ struct SystemStatus
       , loopExciteChannel(0)
       , loopReturnChannel(0)
       , adcProtectEnabled(true)
+      , adcSampleGain(1.0f)
       , adcOverdrive(false)
       , adcSaturated(false)
       , adcSaturationRatio(0.0f)
@@ -122,6 +124,7 @@ private:
   std::string _handleBoardGain(const ParsedCommand& cmd);
   std::string _handleBoardAdcLoop(const ParsedCommand& cmd);
   std::string _handleBoardAdcProtect(const ParsedCommand& cmd);
+  std::string _handleBoardAdcSampleGain(const ParsedCommand& cmd);
   std::string _handleBoardReset(const ParsedCommand& cmd);
   std::string _handleBoardStatus(const ParsedCommand& cmd);
 

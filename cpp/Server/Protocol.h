@@ -54,11 +54,12 @@ struct ServerConfig
  *   BOARD:ADC:LOOP OFF                monitor disabled
  *   BOARD:ADC:PROTECT ON (default)    MEASURE predicted above full scale -> ERR_PARAM
  *   BOARD:ADC:PROTECT OFF             override, the measurement runs
+ *   BOARD:ADC:SAMPLEGAIN <factor>     expected return / excitation ratio of the AFM (default 1)
  *
  *   Other BOARD replies get a "WARN: ..." suffix instead of being rejected.
  *   SYSTEM:STATUS reports LOOP (effective pair; return "X" = OUT1 open,
- *   "?" = unknown), OVERDRIVE, SAT and PROTECT. Unknown board state counts as
- *   the worst case.
+ *   "?" = unknown), OVERDRIVE, SAT, PROTECT and SAMPLEGAIN. Unknown board
+ *   state counts as the worst case.
  */
 #define AFM_COMMAND_LIST \
     X(IDN,                  "*IDN")                   /* IEEE 488.2: Identify */ \
@@ -76,6 +77,7 @@ struct ServerConfig
     X(BOARD_GAIN,           "BOARD:GAIN")             /* Set channel gain */ \
     X(BOARD_ADC_LOOP,       "BOARD:ADC:LOOP")         /* Configure ADC return-path overdrive monitor */ \
     X(BOARD_ADC_PROTECT,    "BOARD:ADC:PROTECT")      /* Refuse or allow ADC overdrive */ \
+    X(BOARD_ADC_SAMPLEGAIN, "BOARD:ADC:SAMPLEGAIN")   /* Expected AFM return ratio */ \
     X(BOARD_RESET,          "BOARD:RESET")            /* Reset electronic board */ \
     X(BOARD_STATUS,         "BOARD:STATUS")           /* Get electronic board status */ \
     X(MEAS_SINC,            "MEASURE:SINC")           /* Broadband sinc measurement + FFT */ \

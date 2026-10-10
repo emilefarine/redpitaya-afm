@@ -123,6 +123,8 @@ std::string CommandHandler::handleCommand(const ParsedCommand& cmd)
     return _handleBoardAdcLoop(cmd);
   case Command::BOARD_ADC_PROTECT:
     return _handleBoardAdcProtect(cmd);
+  case Command::BOARD_ADC_SAMPLEGAIN:
+    return _handleBoardAdcSampleGain(cmd);
   case Command::BOARD_RESET:
     return _handleBoardReset(cmd);
   case Command::BOARD_STATUS:
@@ -243,7 +245,8 @@ std::string CommandHandler::_handleSystStatus(const ParsedCommand& cmd)
   }
   oss << " OVERDRIVE=" << (m_status.adcOverdrive ? "1" : "0")
       << " SAT=" << (m_status.adcSaturated ? "1" : "0")
-      << " PROTECT=" << (m_status.adcProtectEnabled ? "1" : "0");
+      << " PROTECT=" << (m_status.adcProtectEnabled ? "1" : "0")
+      << " SAMPLEGAIN=" << m_status.adcSampleGain;
 
   return buildOkResponse(oss.str());
 }
@@ -542,6 +545,45 @@ std::string CommandHandler::_handleBoardAdcProtect(const ParsedCommand& cmd)
   }
 
   return buildOkResponse(arg0 + _buildOverdriveSuffix());
+}
+
+std::string CommandHandler::_handleBoardAdcSampleGain(const ParsedCommand& cmd)
+{
+  static const char* const c_Usage = "Usage: BOARD:ADC:SAMPLEGAIN <factor>";
+
+  std::string error;
+  if (!_requireBoard(error))
+    return error;
+
+  if (cmd.args.empty())
+  {
+    if (!cmd.isQuery)
+    {
+      return buildErrorResponse(ResponseStatus::ERR_SYNTAX, c_Usage);
+    }
+    std::ostringstream oss;
+    oss << m_status.adcSampleGain;
+    return buildOkResponse(oss.str());
+  }
+
+  float sampleGain;
+  if (cmd.args.size() != 1 || !cmd.getArgFloat(0, sampleGain))
+  {
+    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, c_Usage);
+  }
+  if (sampleGain < InputSafety::MIN_SAMPLE_GAIN || sampleGain > InputSafety::MAX_SAMPLE_GAIN)
+  {
+    std::ostringstream oss;
+    oss << "factor must be " << InputSafety::MIN_SAMPLE_GAIN << " to "
+        << InputSafety::MAX_SAMPLE_GAIN;
+    return buildErrorResponse(ResponseStatus::ERR_PARAM, oss.str());
+  }
+
+  m_status.adcSampleGain = sampleGain;
+
+  std::ostringstream oss;
+  oss << sampleGain << _buildOverdriveSuffix();
+  return buildOkResponse(oss.str());
 }
 
 std::string CommandHandler::_handleBoardReset(const ParsedCommand& cmd)
@@ -1028,7 +1070,7 @@ float CommandHandler::_loopPeak(float amplitude, uint8_t exciteChannel,
     return InputSafety::boardDrivePeak(amplitude, m_channelGains[exciteChannel]);
   }
   return InputSafety::estimateAdcPeak(amplitude, m_channelGains[exciteChannel],
-                                      m_channelGains[returnChannel]);
+                                      m_channelGains[returnChannel], m_status.adcSampleGain);
 }
 
 CommandHandler::AdcLoopEstimate CommandHandler::_estimateAdcLoop(float amplitude) const
@@ -1088,6 +1130,7 @@ std::string CommandHandler::_describeOverdrive(const AdcLoopEstimate& estimate,
   const bool direct = estimate.exciteChannel == estimate.returnChannel;
   const int exciteLabel = static_cast<int>(estimate.exciteChannel + 1);
   const int returnLabel = static_cast<int>(estimate.returnChannel + 1);
+  const float sampleGain = m_status.adcSampleGain;
 
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(2) << "expected ADC peak ~" << estimate.peak
@@ -1096,12 +1139,17 @@ std::string CommandHandler::_describeOverdrive(const AdcLoopEstimate& estimate,
   {
     oss << " (board routing unknown, worst case assumed)";
   }
+  if (!direct && sampleGain != 1.0f)
+  {
+    oss << std::defaultfloat << std::setprecision(6) << " at sample gain " << sampleGain
+        << std::fixed;
+  }
 
   // Rounded down so the advice never exceeds the limit
   float gainProduct = InputSafety::DAC_FULL_SCALE * IElectronicBoard::gainFactor(exciteGain);
   if (!direct)
   {
-    gainProduct *= IElectronicBoard::gainFactor(returnGain);
+    gainProduct *= sampleGain * IElectronicBoard::gainFactor(returnGain);
   }
   const float maxAmplitude =
       std::floor(InputSafety::ADC_FULL_SCALE / gainProduct * 10000.0f) / 10000.0f;
@@ -1121,12 +1169,12 @@ std::string CommandHandler::_describeOverdrive(const AdcLoopEstimate& estimate,
       oss << "; reduce excitation amplitude to <= " << maxAmplitude;
     }
   }
-  else if (InputSafety::maxSafeReturnGain(amplitude, exciteGain, safeGain))
+  else if (InputSafety::maxSafeReturnGain(amplitude, exciteGain, safeGain, sampleGain))
   {
     oss << "; suggested: BOARD:GAIN " << returnLabel << ","
         << static_cast<int>(IElectronicBoard::gainToIndex(safeGain));
   }
-  else if (InputSafety::maxSafeExciteGain(amplitude, returnGain, safeGain))
+  else if (InputSafety::maxSafeExciteGain(amplitude, returnGain, safeGain, sampleGain))
   {
     oss << "; suggested: BOARD:GAIN " << exciteLabel << ","
         << static_cast<int>(IElectronicBoard::gainToIndex(safeGain))

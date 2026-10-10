@@ -163,4 +163,31 @@ TEST(InputSafetyTest, WiringConstantsMatchTheFpgaChannels)
   EXPECT_LT(InputSafety::ADC_LINK_OUTPUT, IElectronicBoard::NUM_CHANNELS);
 }
 
+TEST(InputSafetyTest, SampleGainScalesTheReturnPath)
+{
+  // 1% sample into a x16 return: 0.16 V
+  EXPECT_FLOAT_EQ(0.16f, InputSafety::estimateAdcPeak(1.0f, GainSetting::GAIN_1,
+                                                      GainSetting::GAIN_16, 0.01f));
+  EXPECT_FALSE(InputSafety::isOverdrive(1.0f, GainSetting::GAIN_1, GainSetting::GAIN_16, 0.01f));
+
+  // An amplifying sample tightens the limit
+  EXPECT_TRUE(InputSafety::isOverdrive(1.0f, GainSetting::GAIN_1, GainSetting::GAIN_1, 2.0f));
+
+  // Still capped at the rail
+  EXPECT_FLOAT_EQ(InputSafety::BOARD_RAIL_VOLTAGE,
+                  InputSafety::estimateAdcPeak(1.0f, GainSetting::GAIN_16,
+                                               GainSetting::GAIN_16, 100.0f));
+}
+
+TEST(InputSafetyTest, SafeGainSearchUsesSampleGain)
+{
+  GainSetting safe = GainSetting::GAIN_1_8;
+
+  ASSERT_TRUE(InputSafety::maxSafeReturnGain(1.0f, GainSetting::GAIN_1, safe, 0.1f));
+  EXPECT_EQ(GainSetting::GAIN_8, safe);
+
+  ASSERT_TRUE(InputSafety::maxSafeExciteGain(1.0f, GainSetting::GAIN_16, safe, 0.01f));
+  EXPECT_EQ(GainSetting::GAIN_4, safe);
+}
+
 } // namespace
