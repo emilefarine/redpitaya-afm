@@ -72,6 +72,80 @@ bool BoardProtocol::parseGainStatus(const std::string& statusText,
   return true;
 }
 
+bool BoardProtocol::parseRoutingStatus(const std::string& statusText,
+                                       uint8_t routingOut[],
+                                       bool validOut[],
+                                       uint8_t numChannels)
+{
+  for (uint8_t i = 0; i < numChannels; ++i)
+  {
+    validOut[i] = false;
+  }
+
+  const size_t routingPos = statusText.find("Routing:");
+  if (routingPos == std::string::npos)
+  {
+    return false;
+  }
+
+  size_t sectionEnd = statusText.find("Gains:", routingPos);
+  if (sectionEnd == std::string::npos)
+  {
+    sectionEnd = statusText.size();
+  }
+
+  // One "OUT<n> <- IN<m>" or "OUT<n> <- X" line per output
+  size_t pos = routingPos + 8;
+  while (pos < sectionEnd)
+  {
+    size_t lineEnd = statusText.find('\n', pos);
+    if (lineEnd == std::string::npos || lineEnd > sectionEnd)
+    {
+      lineEnd = sectionEnd;
+    }
+
+    size_t begin = pos;
+    while (begin < lineEnd && (statusText[begin] == ' ' || statusText[begin] == '\t'))
+    {
+      ++begin;
+    }
+
+    if (lineEnd - begin >= 4 && statusText.compare(begin, 3, "OUT") == 0 &&
+        statusText[begin + 3] >= '1' && statusText[begin + 3] <= '4')
+    {
+      const uint8_t output = static_cast<uint8_t>(statusText[begin + 3] - '1');
+      const size_t arrowPos = statusText.find("<-", begin + 4);
+      if (output < numChannels && arrowPos != std::string::npos && arrowPos < lineEnd)
+      {
+        size_t target = arrowPos + 2;
+        while (target < lineEnd && statusText[target] == ' ')
+        {
+          ++target;
+        }
+
+        if (target < lineEnd && statusText[target] == 'X')
+        {
+          routingOut[output] = IElectronicBoard::DISCONNECTED;
+          validOut[output] = true;
+        }
+        else if (lineEnd - target >= 3 && statusText.compare(target, 2, "IN") == 0 &&
+                 statusText[target + 2] >= '1' && statusText[target + 2] <= '4')
+        {
+          const uint8_t input = static_cast<uint8_t>(statusText[target + 2] - '1');
+          if (input < numChannels)
+          {
+            routingOut[output] = input;
+            validOut[output] = true;
+          }
+        }
+      }
+    }
+
+    pos = lineEnd + 1;
+  }
+  return true;
+}
+
 bool BoardProtocol::sendCommand(const std::string& command,
                                 std::string* response,
                                 uint32_t timeoutMs)

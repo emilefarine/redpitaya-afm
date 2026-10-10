@@ -171,6 +171,19 @@ bool ElectronicBoardUART::queryGains(
                                         IElectronicBoard::NUM_CHANNELS);
 }
 
+bool ElectronicBoardUART::queryRouting(
+    std::array<uint8_t, IElectronicBoard::NUM_CHANNELS>& routingOut,
+    std::array<bool, IElectronicBoard::NUM_CHANNELS>& validOut)
+{
+  std::string status;
+  if (!_sendCommand("STATUS", &status))
+  {
+    return false;
+  }
+  return BoardProtocol::parseRoutingStatus(status, routingOut.data(), validOut.data(),
+                                           IElectronicBoard::NUM_CHANNELS);
+}
+
 bool ElectronicBoardUART::reset()
 {
   return _sendCommand("RESET");

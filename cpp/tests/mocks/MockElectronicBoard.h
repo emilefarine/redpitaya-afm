@@ -17,6 +17,8 @@ public:
   MOCK_METHOD(bool, getStatus, (std::string&), (override));
   MOCK_METHOD(bool, queryGains,
               ((std::array<GainSetting, 4>&), (std::array<bool, 4>&)), (override));
+  MOCK_METHOD(bool, queryRouting,
+              ((std::array<uint8_t, 4>&), (std::array<bool, 4>&)), (override));
   MOCK_METHOD(bool, reset, (), (override));
   MOCK_METHOD(const std::string&, getLastError, (), (const, override));
 };

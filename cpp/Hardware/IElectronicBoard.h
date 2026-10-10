@@ -81,6 +81,17 @@ public:
   virtual bool queryGains(std::array<GainSetting, NUM_CHANNELS>& gainsOut,
                           std::array<bool, NUM_CHANNELS>& validOut) = 0;
 
+  /**
+   * @brief Query the input routed to every output
+   *
+   * routingOut[i] is the 0-based input or DISCONNECTED; validOut[i] is false
+   * when output i could not be read.
+   *
+   * @return true on transport success
+   */
+  virtual bool queryRouting(std::array<uint8_t, NUM_CHANNELS>& routingOut,
+                            std::array<bool, NUM_CHANNELS>& validOut) = 0;
+
   /** @brief Reset board to defaults (all outputs disconnected, all gains set to 1) */
   virtual bool reset() = 0;
 
