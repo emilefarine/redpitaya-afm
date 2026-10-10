@@ -140,7 +140,8 @@ void printUsage(const char* programName)
             << "              SYSTEM:INIT, SYSTEM:DEINIT, SYSTEM:SHUTDOWN\n"
             << "  Board:      BOARD:MUX:ROUTE, BOARD:MUX:DISCONNECT,\n"
             << "              BOARD:GAIN, BOARD:RESET, BOARD:STATUS,\n"
-            << "              BOARD:ADC:LOOP, BOARD:ADC:PROTECT\n"
+            << "              BOARD:ADC:LOOP, BOARD:ADC:PROTECT,\n"
+            << "              BOARD:ADC:SAMPLEGAIN\n"
             << "  Measure:    MEASURE:SINC, MEASURE:SWEEP\n"
             << std::endl;
 }
