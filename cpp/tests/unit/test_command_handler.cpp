@@ -508,12 +508,48 @@ TEST_F(CommandHandlerTest, MeasSincNoBinsInRangeReturnsParamError)
   EXPECT_EQ(resp.find("Internal error"), std::string::npos);
 }
 
-TEST_F(CommandHandlerTest, MeasSincIgnoresExtraArguments)
+TEST_F(CommandHandlerTest, MeasSincRejectsExtraArguments)
 {
   initHardware(true);
   primeSuccessfulMeasurement(1024);
+  EXPECT_CALL(*m_rawHw, startMeasurement(_, _)).Times(0);
 
-  EXPECT_EQ(send("MEASURE:SINC 200,100,1024,64,1,99").compare(0, 3, "OK "), 0);
+  EXPECT_EQ(send("MEASURE:SINC 200,100,1024,64,1,99"),
+            "ERR_SYNTAX: MEASURE:SINC takes at most 5 arguments\n");
+}
+
+TEST_F(CommandHandlerTest, SurplusArgumentsAreRejectedForEveryCommand)
+{
+  initHardware(true);
+  allowBoardCommands();
+
+  EXPECT_EQ(send("SYSTEM:PING 1"), "ERR_SYNTAX: SYSTEM:PING takes no arguments\n");
+  EXPECT_EQ(send("BOARD:GAIN 1,3,").rfind("ERR_SYNTAX", 0), 0u);
+  EXPECT_EQ(send("BOARD:MUX:DISCONNECT 1,2").rfind("ERR_SYNTAX", 0), 0u);
+  EXPECT_EQ(send("BOARD:GAIN 1,3").rfind("OK", 0), 0u);
+}
+
+TEST_F(CommandHandlerTest, ModeIsReadOnly)
+{
+  createHandler(AFM::OperatingMode::RP_ONLY);
+  std::string resp = send("SYSTEM:MODE FULL,junk");
+  EXPECT_EQ(resp.rfind("ERR_SYNTAX", 0), 0u) << resp;
+  EXPECT_NE(resp.find("--no-board"), std::string::npos);
+  EXPECT_EQ(send("SYSTEM:MODE?"), "OK RP_ONLY\n");
+}
+
+TEST_F(CommandHandlerTest, ErrorTextsFollowTheLimits)
+{
+  initHardware(true);
+  allowBoardCommands();
+
+  EXPECT_NE(send("BOARD:GAIN 1,8").find("gain_index must be 0-7"), std::string::npos);
+  EXPECT_NE(send("MEASURE:SINC 200,100,8192,48").find("(16, 32, 64, 128, 256, 512, 1024)"),
+            std::string::npos);
+  EXPECT_NE(send("MEASURE:SINC 3900,200,8192,16").find("excitation band exceeds Nyquist"),
+            std::string::npos);
+  EXPECT_NE(send("MEASURE:SWEEP 3900,200,1,16").find("stop frequency exceeds Nyquist"),
+            std::string::npos);
 }
 
 TEST_F(CommandHandlerTest, MeasSincHappyPathReturnsConsistentSpectrum)
@@ -868,19 +904,30 @@ TEST_F(CommandHandlerTest, SweepSinglePointSucceeds)
   EXPECT_NE(resp.find("199.950"), std::string::npos);
 }
 
-TEST_F(CommandHandlerTest, SweepClampsStartToZero)
+TEST_F(CommandHandlerTest, SweepSkipsPointsAtOrBelowZero)
 {
   initHardware(true);
   primeSuccessfulMeasurement(8192);
 
-  std::string resp = send("MEASURE:SWEEP 0.2,1,1"); // start clamped to 0, stop 0.7
-  ASSERT_EQ(resp.compare(0, 3, "OK "), 0) << resp;
+  // Grid -5, -4, ..., 15 kHz: only 1 to 15 kHz are measured
+  auto rows = parseSpectrum(send("MEASURE:SWEEP 5,20,1"));
+  ASSERT_EQ(rows.size(), 15u);
+  EXPECT_NEAR(rows.front().freqKHz, 1.0, 1e-6);
+  EXPECT_NEAR(rows.back().freqKHz, 15.0, 1e-6);
 
-  size_t count = 0;
-  size_t bytes = 0;
-  ASSERT_TRUE(parseDataHeader(resp, count, bytes));
-  EXPECT_EQ(count, 1u);
-  EXPECT_NE(resp.find("0.000"), std::string::npos);
+  // Off-grid start: -0.3 kHz, then 0.7 kHz
+  rows = parseSpectrum(send("MEASURE:SWEEP 0.2,1,1"));
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_NEAR(rows.front().freqKHz, 0.7, 1e-6);
+}
+
+TEST_F(CommandHandlerTest, SweepWithNoPointAboveZeroIsRejected)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+  EXPECT_CALL(*m_rawHw, startMeasurement(_, _)).Times(0);
+
+  EXPECT_EQ(send("MEASURE:SWEEP 1,4,10"), "ERR_PARAM: sweep has no point above 0 Hz\n");
 }
 
 TEST_F(CommandHandlerTest, SweepMidLoopFailureResetsAndClearsBusy)

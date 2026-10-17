@@ -215,7 +215,7 @@ amplitude linearity (no stale data) and repeatability. Exit code 0 when every ch
 The server speaks an SCPI-inspired ASCII protocol over **TCP port 5025**. Commands are
 case-insensitive, colon-separated, `?`-suffixed for queries, with comma-separated arguments;
 every line ends with `\n`. Responses are a single line, `OK [data]` or `ERR_<CODE>: <message>`,
-except `MEASURE:*` and `BOARD:STATUS?` (below).
+except `MEASURE:*` and `BOARD:STATUS?` (below). Extra arguments are refused with `ERR_SYNTAX`.
 
 | Command | Description |
 |---------|-------------|
@@ -240,6 +240,7 @@ header line, so a client can read it in one shot instead of scanning for newline
 For `MEASURE:SWEEP`, `phase_rad` is the phase of the response relative to the excitation
 (negative = lag). For `MEASURE:SINC` it is the FFT phase of the acquired record.
 
+`MEASURE:SWEEP` skips the points at or below 0 Hz when `center - range/2` is negative.
 `BOARD:STATUS?` returns `OK LINES <N>` followed by the `N` lines of the board status block.
 
 A measurement that does not complete returns `ERR_TIMEOUT`. A `MEASURE:SWEEP` stops between

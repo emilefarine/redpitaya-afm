@@ -111,6 +111,31 @@ TEST(ProtocolTest, ParseLinePreservesEmptyArgumentPositions)
   EXPECT_EQ(trailing.args[2], "");
 }
 
+TEST(ProtocolTest, ParseLineTrimsTheLineAndSplitsOnAnyWhitespace)
+{
+  EXPECT_EQ(parseLine(" *IDN?").command, Command::IDN);
+  EXPECT_EQ(parseLine("SYSTEM:PING\t").command, Command::SYST_PING);
+
+  auto tab = parseLine("MEASURE:SINC\t200,100");
+  EXPECT_EQ(tab.command, Command::MEAS_SINC);
+  ASSERT_EQ(tab.args.size(), 2u);
+  EXPECT_EQ(tab.args[0], "200");
+
+  auto trailing = parseLine("BOARD:ADC:LOOP?  ");
+  EXPECT_EQ(trailing.command, Command::BOARD_ADC_LOOP);
+  EXPECT_TRUE(trailing.isQuery);
+  EXPECT_TRUE(trailing.args.empty());
+}
+
+TEST(ProtocolTest, MaxArgCountPerCommand)
+{
+  EXPECT_EQ(maxArgCount(Command::IDN), 0u);
+  EXPECT_EQ(maxArgCount(Command::SYST_MODE), 0u);
+  EXPECT_EQ(maxArgCount(Command::BOARD_MUX_DISCONNECT), 1u);
+  EXPECT_EQ(maxArgCount(Command::BOARD_GAIN), 2u);
+  EXPECT_EQ(maxArgCount(Command::MEAS_SWEEP), 5u);
+}
+
 TEST(ProtocolTest, ParseLineUnknownCommands)
 {
   EXPECT_EQ(parseLine("GARBAGE").command, Command::UNKNOWN);
@@ -223,14 +248,14 @@ TEST(ProtocolTest, GetArgFloatAcceptsCommonFormats)
   EXPECT_FLOAT_EQ(value, 1000.0f);
 }
 
-TEST(ProtocolTest, GetArgFloatAcceptsHexFloat)
+TEST(ProtocolTest, GetArgFloatRejectsHexFloat)
 {
   ParsedCommand cmd;
-  cmd.args = {"0x1p3"};
+  cmd.args = {"0x1p3", "0X10"};
 
   float value = 0.0f;
-  EXPECT_TRUE(cmd.getArgFloat(0, value));
-  EXPECT_FLOAT_EQ(value, 8.0f);
+  EXPECT_FALSE(cmd.getArgFloat(0, value));
+  EXPECT_FALSE(cmd.getArgFloat(1, value));
 }
 
 TEST(ProtocolTest, GetArgFloatUnderflowBecomesZero)
@@ -328,13 +353,11 @@ TEST(ProtocolTest, BuildSpectrumResponseEmptySpectrum)
 TEST(ProtocolTest, ServerConfigConstants)
 {
   EXPECT_EQ(ServerConfig::DEFAULT_PORT, 5025);
-  EXPECT_EQ(ServerConfig::MIN_DECIMATION, 16);
-  EXPECT_EQ(ServerConfig::MAX_DECIMATION, 1024);
 }
 
 TEST(ProtocolTest, VersionInfoToString)
 {
-  EXPECT_EQ(VersionInfo::toString(), "2.9.0");
+  EXPECT_EQ(VersionInfo::toString(), "2.10.0");
 }
 
 TEST(ProtocolTest, BuildTextResponseCountsLines)
