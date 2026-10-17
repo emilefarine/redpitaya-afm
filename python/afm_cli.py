@@ -26,7 +26,9 @@ from typing import Optional
 
 import numpy as np
 
-from afm_client import AFMClient, AFMError, SpectrumData
+from afm_client import AFMClient, AFMError, SpectrumData, GAIN_LABELS
+
+GAIN_INDEX_HELP = ", ".join(f"{i}={label}" for i, label in enumerate(GAIN_LABELS))
 
 
 class AFMShell(cmd.Cmd):
@@ -193,7 +195,7 @@ class AFMShell(cmd.Cmd):
             print(f"Error: {e}")
 
     def do_gain(self, arg):
-        """Set gain: gain <channel> <index>  channel=1-4, index 0-7: 1/8, 1/4, 1/2, 1, 2, 4, 8, 16"""
+        """Set gain: gain <channel> <index>  (channel 1-4, index 0-7, see 'help' for the gains)"""
         args = arg.split()
         try:
             if len(args) == 2:
@@ -202,7 +204,7 @@ class AFMShell(cmd.Cmd):
                 print(f"OK: Channel {channel} gain set to {result}")
             else:
                 print("Usage: gain <channel> <index>  (channel 1-4)")
-                print("  Gain indices: 0=1/8, 1=1/4, 2=1/2, 3=1, 4=2, 5=4, 6=8, 7=16")
+                print(f"  Gain indices: {GAIN_INDEX_HELP}")
         except ValueError:
             print("Error: Arguments must be integers")
         except AFMError as e:
@@ -445,7 +447,7 @@ class AFMShell(cmd.Cmd):
         if arg:
             super().do_help(arg)
         else:
-            print("""
+            print(f"""
 Available Commands:
 -------------------------------------------------------------
 System:
@@ -468,7 +470,7 @@ Electronic Board:
                           out and in: 1-4 (matching board connector labels)
   mux disconnect <out>    Disconnect output (BOARD:MUX:DISCONNECT)
   gain <ch> <idx>         Set gain (BOARD:GAIN)
-                          ch: 1-4, idx: 0=1/8, 1=1/4, 2=1/2, 3=1, 4=2, 5=4, 6=8, 7=16
+                          ch: 1-4, idx: {GAIN_INDEX_HELP}
   adc_loop auto           Follow the MUX routing for ADC protection (default)
   adc_loop <exc> <ret>    Name the excitation / return channels by hand
   adc_loop off            Disable the ADC input monitor (BOARD:ADC:LOOP)

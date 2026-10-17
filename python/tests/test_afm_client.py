@@ -20,6 +20,9 @@ from afm_client import (  # noqa: E402
     AFMProtocolError,
     AFMTimeoutError,
     BoardStatus,
+    DECIMATIONS,
+    GAIN_LABELS,
+    GainSetting,
     OperatingMode,
     SystemStatus,
 )
@@ -639,6 +642,15 @@ class ConnectionHealthTests(ClientTestCase):
         client = self.make_client(server)
         self.assertEqual(client.send_command("BOARD:STATUS?"), "Routing:\n  OUT1 <- IN1")
         self.assertTrue(client.ping())
+
+
+class SharedConstantsTests(unittest.TestCase):
+    def test_gain_labels_cover_every_gain_setting(self):
+        self.assertEqual(len(GAIN_LABELS), len(GainSetting))
+        self.assertEqual(GAIN_LABELS[GainSetting.GAIN_1.value], "1")
+
+    def test_decimations_are_the_powers_of_two_the_server_accepts(self):
+        self.assertEqual(DECIMATIONS, tuple(2 ** n for n in range(4, 11)))
 
 
 if __name__ == "__main__":

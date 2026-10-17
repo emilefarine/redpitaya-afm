@@ -74,7 +74,9 @@ pip install -r python/requirements.txt
 
 All scripts that connect to the board accept `--host <ip>` (or the `RP_HOST` environment
 variable). SSH credentials default to the Red Pitaya factory login `root` / `root` and can be
-overridden with `--user` / `--password` (or `RP_USER` / `RP_PASSWORD`).
+overridden with `--user` / `--password` (or `RP_USER` / `RP_PASSWORD`). Prefer
+`RP_PASSWORD`: a `--password` value stays in the shell history. `rp_deploy.py` accepts any SSH
+host key, which suits a Red Pitaya on a private bench network.
 
 ## Usage
 

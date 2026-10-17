@@ -213,5 +213,15 @@ class BoardCommandTests(unittest.TestCase):
         self.assertIn("OUT1 <- IN1", buffer.getvalue())
 
 
+class HelpTests(unittest.TestCase):
+    def test_gain_indices_are_listed_from_the_client_labels(self):
+        shell = AFMShell(AFMClient("127.0.0.1", 1))
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            shell.do_help("")
+            shell.do_gain("")
+        self.assertEqual(buffer.getvalue().count("0=1/8, 1=1/4, 2=1/2, 3=1"), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

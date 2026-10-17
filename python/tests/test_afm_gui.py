@@ -586,6 +586,23 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(dialog.routing[2], 3)
         dialog.close()
 
+    def test_schematic_mock_keeps_one_input_on_several_outputs(self):
+        dialog = RoutingSchematicDialog(MockAFMClient())
+        for out in (1, 2):
+            dialog.on_node_clicked(SchemNode.KIND_OUT, out)
+            dialog.on_node_clicked(SchemNode.KIND_IN, 3)
+        self.assertEqual(dialog.routing[1], 3)
+        self.assertEqual(dialog.routing[2], 3)
+        dialog.close()
+
+    def test_decimation_and_gain_lists_come_from_the_client(self):
+        from afm_client import DECIMATIONS, GAIN_LABELS
+        decimations = [self.window.dec_combo.itemData(i)
+                       for i in range(self.window.dec_combo.count())]
+        self.assertEqual(decimations, list(DECIMATIONS))
+        self.assertEqual(self.window.dec_combo.currentData(), 64)
+        self.assertEqual(self.window.gain_val.count(), len(GAIN_LABELS))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -24,6 +24,7 @@ REMOTE_FPGA_DIR = "/root/afm/fpga"
 BOOTGEN_PATH = None         # explicit bootgen path (--bootgen / BOOTGEN); only for .bit conversion
 REDPITAYA_USER = "root"
 REDPITAYA_PASSWORD = "root"
+SSH_TIMEOUT_S = 10
 
 def run_remote(ssh, command):
     """Run a command on the Red Pitaya; return (exit_status, stdout, stderr).
@@ -536,7 +537,9 @@ def main():
     bitfile_ready = not copy_requested
 
     try:
-        ssh.connect(args.host, username=REDPITAYA_USER, password=REDPITAYA_PASSWORD)
+        ssh.connect(args.host, username=REDPITAYA_USER, password=REDPITAYA_PASSWORD,
+                    timeout=SSH_TIMEOUT_S, banner_timeout=SSH_TIMEOUT_S,
+                    auth_timeout=SSH_TIMEOUT_S)
         print("Connected successfully.")
 
         sync_remote_clock(ssh)
