@@ -19,6 +19,7 @@
 using ::testing::_;
 using ::testing::AtLeast;
 using ::testing::Invoke;
+using ::testing::NiceMock;
 using ::testing::Return;
 using ::testing::Throw;
 using ::testing::ReturnRef;
@@ -33,8 +34,8 @@ class CommandHandlerTest : public ::testing::Test
 protected:
   void SetUp() override
   {
-    m_nextHw = std::make_unique<MockRedPitayaHardware>();
-    m_nextBoard = std::make_unique<MockElectronicBoard>();
+    m_nextHw = std::make_unique<NiceMock<MockRedPitayaHardware>>();
+    m_nextBoard = std::make_unique<NiceMock<MockElectronicBoard>>();
     m_rawHw = m_nextHw.get();
     m_rawBoard = m_nextBoard.get();
 
@@ -48,7 +49,7 @@ protected:
         {
           if (!m_nextHw)
           {
-            m_nextHw = std::make_unique<MockRedPitayaHardware>();
+            m_nextHw = std::make_unique<NiceMock<MockRedPitayaHardware>>();
           }
           m_rawHw = m_nextHw.get();
           return std::move(m_nextHw);
@@ -58,7 +59,7 @@ protected:
           ++m_boardFactoryCalls;
           if (!m_nextBoard)
           {
-            m_nextBoard = std::make_unique<MockElectronicBoard>();
+            m_nextBoard = std::make_unique<NiceMock<MockElectronicBoard>>();
           }
           m_rawBoard = m_nextBoard.get();
           return std::move(m_nextBoard);
@@ -68,13 +69,13 @@ protected:
 
   MockRedPitayaHardware* stageHardware()
   {
-    m_nextHw = std::make_unique<MockRedPitayaHardware>();
+    m_nextHw = std::make_unique<NiceMock<MockRedPitayaHardware>>();
     return m_nextHw.get();
   }
 
   MockElectronicBoard* stageBoard()
   {
-    m_nextBoard = std::make_unique<MockElectronicBoard>();
+    m_nextBoard = std::make_unique<NiceMock<MockElectronicBoard>>();
     return m_nextBoard.get();
   }
 
