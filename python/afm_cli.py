@@ -20,14 +20,13 @@ Usage:
 import argparse
 import cmd
 import logging
-import math
 import sys
 import time
 from typing import Optional
 
 import numpy as np
 
-from afm_client import AFMClient, AFMError, SpectrumData, OperatingMode
+from afm_client import AFMClient, AFMError, SpectrumData
 
 
 class AFMShell(cmd.Cmd):
@@ -43,10 +42,21 @@ class AFMShell(cmd.Cmd):
 """
     prompt = "AFM> "
 
+    # Commands that never talk to the server
+    LOCAL_COMMANDS = ("connect", "help", "?", "quit", "exit", "EOF", "data_show", "data_save")
+
     def __init__(self, client: AFMClient):
         super().__init__()
         self.client = client
         self._last_spectrum: Optional[SpectrumData] = None
+
+    def postcmd(self, stop, line):
+        """Point to 'connect' when a command finds or leaves the client offline."""
+        words = line.split()
+        if not stop and words and words[0] not in self.LOCAL_COMMANDS \
+                and not self.client.is_connected:
+            print("Not connected. Use 'connect [host] [port]' to reconnect.")
+        return stop
 
     def default(self, line: str):
         """Send raw command to server"""
@@ -162,27 +172,8 @@ class AFMShell(cmd.Cmd):
 
     # ------ Electronic Board Commands ------
 
-    def _board_unavailable_hint(self) -> Optional[str]:
-        """Explain why the electronic board cannot be used, or None if usable."""
-        try:
-            status = self.client.get_status()
-        except AFMError:
-            return None
-        if status.mode == OperatingMode.RP_ONLY:
-            return ("Electronic board unavailable: server started in RP-only mode "
-                    "(restart without --no-board to enable BOARD commands)")
-        if not status.hardware_initialized:
-            return "Electronic board unavailable: run 'init' first"
-        if not status.board_connected:
-            return "Electronic board unavailable: board not connected"
-        return None
-
     def do_mux(self, arg):
         """Set MUX routing: mux <output> <input> or mux disconnect <output>  (channels 1-4)"""
-        hint = self._board_unavailable_hint()
-        if hint:
-            print(hint)
-            return
         args = arg.split()
         try:
             if len(args) == 2:
@@ -203,10 +194,6 @@ class AFMShell(cmd.Cmd):
 
     def do_gain(self, arg):
         """Set gain: gain <channel> <index>  channel=1-4, index 0-7: 1/8, 1/4, 1/2, 1, 2, 4, 8, 16"""
-        hint = self._board_unavailable_hint()
-        if hint:
-            print(hint)
-            return
         args = arg.split()
         try:
             if len(args) == 2:
@@ -223,10 +210,6 @@ class AFMShell(cmd.Cmd):
 
     def do_board_reset(self, arg):
         """Reset electronic board to defaults"""
-        hint = self._board_unavailable_hint()
-        if hint:
-            print(hint)
-            return
         try:
             result = self.client.reset_board()
             print(f"OK: {result}")
@@ -235,10 +218,6 @@ class AFMShell(cmd.Cmd):
 
     def do_board_status(self, arg):
         """Get electronic board status"""
-        hint = self._board_unavailable_hint()
-        if hint:
-            print(hint)
-            return
         try:
             result = self.client.get_board_status()
             print(result)
@@ -247,10 +226,6 @@ class AFMShell(cmd.Cmd):
 
     def do_adc_loop(self, arg):
         """Select the ADC protection loop: adc_loop auto | <excite_ch> <return_ch> | off"""
-        hint = self._board_unavailable_hint()
-        if hint:
-            print(hint)
-            return
         args = arg.split()
         try:
             if args and args[0].lower() == 'off':
@@ -278,10 +253,6 @@ class AFMShell(cmd.Cmd):
 
     def do_adc_protect(self, arg):
         """Refuse or allow measurements that would overdrive the ADC: adc_protect [on|off]"""
-        hint = self._board_unavailable_hint()
-        if hint:
-            print(hint)
-            return
         choice = arg.strip().lower()
         try:
             if not choice:
@@ -299,10 +270,6 @@ class AFMShell(cmd.Cmd):
 
     def do_adc_sample_gain(self, arg):
         """Expected return / excitation ratio of the sample: adc_sample_gain [factor]"""
-        hint = self._board_unavailable_hint()
-        if hint:
-            print(hint)
-            return
         try:
             if not arg.strip():
                 print(f"  ADC Sample Gain: {self.client.get_adc_sample_gain():g}")
@@ -357,6 +324,8 @@ class AFMShell(cmd.Cmd):
             print("Error: Invalid arguments")
         except AFMError as e:
             self._print_measure_error(e)
+        except KeyboardInterrupt:
+            self._cancel_measurement()
 
     def do_sweep(self, arg):
         """Frequency sweep measurement: sweep <center_kHz> <range_kHz> [step_kHz] [decimation] [amplitude]"""
@@ -375,16 +344,11 @@ class AFMShell(cmd.Cmd):
             dec = int(args[3]) if len(args) > 3 else 64
             amp = float(args[4]) if len(args) > 4 else 1.0
 
-            num_steps = 0
-            if math.isfinite(range_kHz) and math.isfinite(step) and step > 0:
-                ratio = range_kHz / step
-                if math.isfinite(ratio) and ratio >= 0:
-                    num_steps = int(ratio) + 1
-            steps_text = f"{num_steps} points" if num_steps else "unknown points"
+            num_points = AFMClient.sweep_points(range_kHz, step)
             print(f"Sweep measurement: center={center} kHz, range={range_kHz} kHz, "
-                  f"step={step} kHz ({steps_text})")
+                  f"step={step} kHz ({num_points} points)")
             print(f"  decimation={dec}, amplitude={amp}")
-            print("Sweeping...", end="", flush=True)
+            print("Sweeping... (Ctrl+C to cancel)", end="", flush=True)
 
             start = time.time()
             self._last_spectrum = self.client.measure_sweep(
@@ -399,6 +363,13 @@ class AFMShell(cmd.Cmd):
             print("Error: Invalid arguments")
         except AFMError as e:
             self._print_measure_error(e)
+        except KeyboardInterrupt:
+            self._cancel_measurement()
+
+    def _cancel_measurement(self):
+        """Ctrl+C: close the connection so a 2.9.0+ server stops the sweep."""
+        self.client.disconnect()
+        print("\nCancelled.")
 
     @staticmethod
     def _print_spectrum_summary(spectrum: SpectrumData):

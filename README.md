@@ -147,6 +147,10 @@ Desktop GUI (PyQt6, real-time magnitude/phase plots):
 python python/afm_gui.py
 ```
 
+GUI commands run in the background, so a server that stops answering never freezes the
+window. While a measurement runs, the Measure button becomes Cancel: it closes the connection
+and reconnects (a server from 2.9.0 also stops the sweep). In the CLI, Ctrl+C cancels.
+
 The GUI has an "Open Routing Schematic" button showing the live 4x4 crossbar
 routing and PGA gains (read from `BOARD:STATUS?`); the same dialog runs
 standalone without hardware for preview:

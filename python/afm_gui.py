@@ -1,6 +1,7 @@
 import logging
 import sys
 import time
+from collections import deque
 
 import numpy as np
 
@@ -246,6 +247,32 @@ class ConnectWorker(QThread):
 
 
 # ---------------------------------------------------------------------------
+# Control command worker thread
+# ---------------------------------------------------------------------------
+class CommandWorker(QThread):
+    """Runs one client call in a background thread."""
+    completed = pyqtSignal(object)  # self, with result or error set
+
+    def __init__(self, call, on_done, on_error):
+        super().__init__()
+        self.call = call
+        self.on_done = on_done
+        self.on_error = on_error
+        self.result = None
+        self.error = None
+
+    def run(self):
+        try:
+            self.result = self.call()
+        except AFMError as exc:
+            self.error = exc
+        except Exception as exc:
+            logger.exception("Command worker failed")
+            self.error = AFMError(f"Unexpected error: {exc}")
+        self.completed.emit(self)
+
+
+# ---------------------------------------------------------------------------
 # Main Window
 # ---------------------------------------------------------------------------
 class AFMMainWindow(QMainWindow):
@@ -258,6 +285,12 @@ class AFMMainWindow(QMainWindow):
         self.client = AFMClient("192.168.1.100", 5025)
         self._worker: MeasureWorker | None = None
         self._connect_worker: ConnectWorker | None = None
+        self._command_worker: CommandWorker | None = None
+        self._commands: deque = deque()
+        self._workers: list[QThread] = []
+        self._schematic_dialog: RoutingSchematicDialog | None = None
+        self._server_mode = OperatingMode.FULL
+        self._cancelling = False
         self._last_spectrum: SpectrumData | None = None
         self._measure_time = 0.0
         self._last_measure_mode = "sinc"
@@ -701,7 +734,9 @@ class AFMMainWindow(QMainWindow):
         if not host:
             QMessageBox.warning(self, "Error", "Please enter an IP address")
             return
+        self._start_connect(host, port)
 
+    def _start_connect(self, host: str, port: int):
         self.client = AFMClient(host, port)
         self.connect_btn.setEnabled(False)
         self.connect_btn.setText("Connecting…")
@@ -718,8 +753,8 @@ class AFMMainWindow(QMainWindow):
         self._update_connection_ui(True)
         self.statusBar().showMessage(f"Connected - {welcome}")
         self._on_refresh_status()
-        dlg = getattr(self, "_schematic_dialog", None)
-        if dlg is not None:
+        dlg = self._schematic_dialog
+        if dlg is not None and dlg.isVisible():
             dlg.refresh_state()
 
     def _on_connect_error(self, msg: str):
@@ -746,10 +781,11 @@ class AFMMainWindow(QMainWindow):
             self.adc_status_label.setText("N/A")
             self.adc_status_label.setStyleSheet(f"color: {TEXT_DIM};")
             self.adc_status_label.setToolTip("")
+            self._commands.clear()
 
         self._set_controls_enabled(connected)
 
-        dlg = getattr(self, "_schematic_dialog", None)
+        dlg = self._schematic_dialog
         if dlg is not None:
             dlg.set_client(self.client if connected else None)
 
@@ -827,16 +863,49 @@ class AFMMainWindow(QMainWindow):
             self.adc_protect_check.setChecked(status.adc_protect)
             self.adc_protect_check.blockSignals(False)
 
+    def _run_command(self, call, on_done=None, on_error=None):
+        """Queue a client call: calls run one at a time off the GUI thread, handlers run here."""
+        self._commands.append((call, on_done, on_error))
+        self._start_next_command()
+
+    def _start_next_command(self):
+        if self._closing or self._command_worker is not None or not self._commands:
+            return
+        worker = CommandWorker(*self._commands.popleft())
+        worker.completed.connect(self._on_command_completed)
+        self._command_worker = worker
+        # Keep a reference until the thread has finished
+        self._workers = [w for w in self._workers if w.isRunning()] + [worker]
+        worker.start()
+
+    def _on_command_completed(self, worker: CommandWorker):
+        self._command_worker = None
+        try:
+            if self._closing:
+                return
+            if worker.error is None:
+                if worker.on_done is not None:
+                    worker.on_done(worker.result)
+            else:
+                self._sync_connection_ui()
+                if worker.on_error is not None:
+                    worker.on_error(worker.error)
+        finally:
+            self._start_next_command()
+
+    def _commands_idle(self) -> bool:
+        return self._command_worker is None and not self._commands
+
+    def _show_status(self, message: str):
+        self.statusBar().showMessage(message)
+
     def _on_sample_gain_edited(self):
         value = self.sample_gain_spin.value()
         if value == self._sample_gain:
             return
-        try:
-            self.client.set_adc_sample_gain(value)
-            self.statusBar().showMessage(f"Sample gain set to {value:g}")
-        except AFMError as exc:
-            self._sync_connection_ui()
-            self.statusBar().showMessage(f"Sample gain error: {exc}")
+        self._run_command(lambda: self.client.set_adc_sample_gain(value),
+                          lambda _: self._show_status(f"Sample gain set to {value:g}"),
+                          lambda exc: self._show_status(f"Sample gain error: {exc}"))
         self._on_refresh_status()
 
     def _on_adc_protect_toggled(self, checked: bool):
@@ -851,13 +920,11 @@ class AFMMainWindow(QMainWindow):
                 self.adc_protect_check.setChecked(True)
                 self.adc_protect_check.blockSignals(False)
                 return
-        try:
-            self.client.set_adc_protect(checked)
-            self.statusBar().showMessage(
-                "ADC protection enabled" if checked else "ADC protection overridden")
-        except AFMError as exc:
-            self._sync_connection_ui()
-            self.statusBar().showMessage(f"ADC protection error: {exc}")
+        self._run_command(
+            lambda: self.client.set_adc_protect(checked),
+            lambda _: self._show_status(
+                "ADC protection enabled" if checked else "ADC protection overridden"),
+            lambda exc: self._show_status(f"ADC protection error: {exc}"))
         self._on_refresh_status()
 
     def _sync_connection_ui(self):
@@ -869,106 +936,106 @@ class AFMMainWindow(QMainWindow):
     # Status & Initialization
     # ---------------------------------------------------------------
     def _on_init_hw(self):
-        try:
-            result = self.client.init()
-            self.statusBar().showMessage(f"Hardware initialization: {result}")
+        self._show_status("Initializing hardware…")
+
+        def done(result):
+            self._show_status(f"Hardware initialization: {result}")
             self._on_refresh_status()
-        except AFMError as exc:
-            self._sync_connection_ui()
-            self.statusBar().showMessage(f"Hardware init error: {exc}")
+
+        self._run_command(lambda: self.client.init(), done,
+                          lambda exc: self._show_status(f"Hardware init error: {exc}"))
 
     def _on_refresh_status(self):
         if not self.client.is_connected:
             return
-        try:
-            status = self.client.get_status()
-            rp_only = status.mode == OperatingMode.RP_ONLY
-            board_label = "RP-only" if rp_only else ("✓" if status.board_connected else "✗")
-            board_color = (TEXT_DIM if rp_only
-                           else (GREEN if status.board_connected else RED))
-            icons = ["✓" if status.hardware_initialized else "✗",
-                     board_label,
-                     str(status.decimation)]
-            colors = [GREEN if status.hardware_initialized else RED,
-                      board_color,
-                      TEXT]
-            for val_lbl, icon, color in zip(self.status_values, icons, colors):
-                val_lbl.setText(icon)
-                val_lbl.setStyleSheet(f"color: {color}; font-weight: bold;")
-            self._update_board_controls(status)
-            self._update_adc_indicator(status)
-        except AFMBusyError:
-            self.statusBar().showMessage("Status refresh skipped: client busy")
-        except AFMError as exc:
-            self._sync_connection_ui()
-            self.statusBar().showMessage(f"Status error: {exc}")
+        self._run_command(lambda: self.client.get_status(), self._show_system_status,
+                          self._on_status_error)
+
+    def _on_status_error(self, exc: AFMError):
+        if isinstance(exc, AFMBusyError):
+            self._show_status("Status refresh skipped: client busy")
+        else:
+            self._show_status(f"Status error: {exc}")
+
+    def _show_system_status(self, status):
+        rp_only = status.mode == OperatingMode.RP_ONLY
+        board_label = "RP-only" if rp_only else ("✓" if status.board_connected else "✗")
+        board_color = (TEXT_DIM if rp_only
+                       else (GREEN if status.board_connected else RED))
+        icons = ["✓" if status.hardware_initialized else "✗",
+                 board_label,
+                 str(status.decimation)]
+        colors = [GREEN if status.hardware_initialized else RED,
+                  board_color,
+                  TEXT]
+        for val_lbl, icon, color in zip(self.status_values, icons, colors):
+            val_lbl.setText(icon)
+            val_lbl.setStyleSheet(f"color: {color}; font-weight: bold;")
+        self._update_board_controls(status)
+        self._update_adc_indicator(status)
+        self._server_mode = status.mode
+        if self._schematic_dialog is not None:
+            self._schematic_dialog.set_mode(status.mode)
 
     # ---------------------------------------------------------------
     # Board controls
     # ---------------------------------------------------------------
     def _on_mux_set(self):
-        try:
-            out = self.mux_out.currentIndex() + 1  # Convert to 1-based (board connector label)
-            inp = self.mux_in.currentIndex() + 1   # Convert to 1-based (board connector label)
-            self.client.set_mux(out, inp)
-            self.statusBar().showMessage(f"MUX: Input {inp} -> Output {out}")
-        except AFMError as exc:
-            self._sync_connection_ui()
-            self.statusBar().showMessage(f"MUX error: {exc}")
+        out = self.mux_out.currentIndex() + 1  # Convert to 1-based (board connector label)
+        inp = self.mux_in.currentIndex() + 1   # Convert to 1-based (board connector label)
+        self._run_command(lambda: self.client.set_mux(out, inp),
+                          lambda _: self._show_status(f"MUX: Input {inp} -> Output {out}"),
+                          lambda exc: self._show_status(f"MUX error: {exc}"))
 
     def _on_mux_disconnect(self):
-        try:
-            out = self.mux_out.currentIndex() + 1  # Convert to 1-based (board connector label)
-            self.client.disconnect_mux(out)
-            self.statusBar().showMessage(f"MUX: Output {out} disconnected")
-        except AFMError as exc:
-            self._sync_connection_ui()
-            self.statusBar().showMessage(f"MUX error: {exc}")
+        out = self.mux_out.currentIndex() + 1  # Convert to 1-based (board connector label)
+        self._run_command(lambda: self.client.disconnect_mux(out),
+                          lambda _: self._show_status(f"MUX: Output {out} disconnected"),
+                          lambda exc: self._show_status(f"MUX error: {exc}"))
 
     def _on_gain_set(self):
-        try:
-            ch = self.gain_ch.currentIndex() + 1  # Convert to 1-based (board connector label)
-            idx = self.gain_val.currentData()
-            result = self.client.set_gain(ch, idx)
+        ch = self.gain_ch.currentIndex() + 1  # Convert to 1-based (board connector label)
+        idx = self.gain_val.currentData()
+
+        def done(result):
             if " WARN:" in result:
                 # Server appends a warning when the gain risks ADC saturation
                 gain_part, warn_part = result.split(" WARN:", 1)
-                self.statusBar().showMessage(
-                    f"Gain: Channel {ch} set to x{gain_part}; {warn_part.strip()}")
+                self._show_status(f"Gain: Channel {ch} set to x{gain_part}; {warn_part.strip()}")
             else:
-                self.statusBar().showMessage(f"Gain: Channel {ch} set to x{result}")
-        except AFMError as exc:
-            self._sync_connection_ui()
-            self.statusBar().showMessage(f"Gain error: {exc}")
+                self._show_status(f"Gain: Channel {ch} set to x{result}")
+
+        self._run_command(lambda: self.client.set_gain(ch, idx), done,
+                          lambda exc: self._show_status(f"Gain error: {exc}"))
 
     def _on_board_status(self):
-        try:
-            result = self.client.get_board_status()
-            QMessageBox.information(self, "Board Status", result)
-        except AFMError as exc:
-            self._sync_connection_ui()
-            self.statusBar().showMessage(f"Board status error: {exc}")
+        self._run_command(lambda: self.client.get_board_status(),
+                          lambda result: QMessageBox.information(self, "Board Status", result),
+                          lambda exc: self._show_status(f"Board status error: {exc}"))
 
     def _on_open_schematic(self):
-        dlg = getattr(self, "_schematic_dialog", None)
-        if dlg is not None and dlg.isVisible():
-            dlg.raise_()
-            dlg.activateWindow()
-            return
-        self._schematic_dialog = RoutingSchematicDialog(self.client, parent=self)
-        self._schematic_dialog.show()
+        dlg = self._schematic_dialog
+        if dlg is None:
+            dlg = RoutingSchematicDialog(self.client, parent=self,
+                                         run_command=self._run_command,
+                                         mode=self._server_mode)
+            self._schematic_dialog = dlg
+        elif not dlg.isVisible():
+            dlg.set_client(self.client if self.client.is_connected else None)
+            dlg.set_mode(self._server_mode)
+            dlg.refresh_state()
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def _on_board_reset(self):
         reply = QMessageBox.question(
             self, "Confirm", "Reset electronic board to defaults?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
-            try:
-                result = self.client.reset_board()
-                self.statusBar().showMessage(f"Board reset: {result}")
-            except AFMError as exc:
-                self._sync_connection_ui()
-                self.statusBar().showMessage(f"Board reset error: {exc}")
+            self._run_command(lambda: self.client.reset_board(),
+                              lambda result: self._show_status(f"Board reset: {result}"),
+                              lambda exc: self._show_status(f"Board reset error: {exc}"))
 
     # ---------------------------------------------------------------
     # Measurement
@@ -985,7 +1052,10 @@ class AFMMainWindow(QMainWindow):
 
     def _on_measure(self):
         if self._worker is not None and self._worker.isRunning():
-            self.statusBar().showMessage("Measurement already in progress")
+            self._cancel_measurement()
+            return
+        if not self._commands_idle():
+            self._show_status("Wait for the running command to finish")
             return
 
         is_sinc = self.radio_sinc.isChecked()
@@ -1010,9 +1080,11 @@ class AFMMainWindow(QMainWindow):
                     f"step={params['step']:.2f} kHz")
 
         self._set_controls_enabled(False)
-        self.measure_btn.setText("⏳ Measuring…")
+        self.measure_btn.setEnabled(True)
+        self.measure_btn.setText("■  Cancel")
         self.statusBar().showMessage(f"Measuring… {desc}")
         self._pending_measure_mode = mode
+        self._cancelling = False
 
         self._worker = MeasureWorker(self.client, mode, params)
         self._worker.finished.connect(self._on_measure_done)
@@ -1024,8 +1096,25 @@ class AFMMainWindow(QMainWindow):
     def _on_measure_elapsed(self, dt: float):
         self._measure_time = dt
 
+    def _cancel_measurement(self):
+        """Close the connection: the read stops here and a 2.9.0+ server stops the sweep."""
+        self._cancelling = True
+        self.measure_btn.setEnabled(False)
+        self._show_status("Cancelling…")
+        self.client.disconnect()
+
+    def _on_measure_cancelled(self):
+        self._cancelling = False
+        self.measure_btn.setText("▶  Measure")
+        self._update_connection_ui(False)
+        self._start_connect(self.client.host, self.client.port)
+        self._show_status("Measurement cancelled, reconnecting…")
+
     def _on_measure_done(self, spectrum: SpectrumData):
         if self._closing:
+            return
+        if self._cancelling:
+            self._on_measure_cancelled()
             return
         self._last_spectrum = spectrum
         self._last_measure_mode = self._pending_measure_mode
@@ -1042,6 +1131,9 @@ class AFMMainWindow(QMainWindow):
 
     def _on_measure_error(self, msg: str):
         if self._closing:
+            return
+        if self._cancelling:
+            self._on_measure_cancelled()
             return
         # A read timeout closes the connection; reflect that in the UI so the
         # next click reconnects instead of pretending we are still connected.
@@ -1433,7 +1525,7 @@ class AFMMainWindow(QMainWindow):
         # Closing the socket aborts any in-flight read in the worker.
         if self.client.is_connected:
             self.client.disconnect()
-        for worker in (self._worker, self._connect_worker):
+        for worker in [self._worker, self._connect_worker] + self._workers:
             if worker is not None and worker.isRunning():
                 if not worker.wait(5000):
                     logger.warning("Worker did not stop; terminating")

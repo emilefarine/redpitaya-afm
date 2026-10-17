@@ -30,9 +30,11 @@ import numpy as np  # noqa: E402
 from test_afm_client import FakeSCPIServer, spectrum_response  # noqa: E402
 
 if HAVE_QT:
-    from afm_client import AFMClient, SpectrumData, SystemStatus
+    from unittest import mock
+
+    from afm_client import AFMClient, OperatingMode, SpectrumData, SystemStatus
     from afm_gui import AFMMainWindow
-    from afm_schematic import MockAFMClient, RoutingSchematicDialog
+    from afm_schematic import MockAFMClient, RoutingSchematicDialog, SchemNode
 
 
 @unittest.skipUnless(HAVE_QT, "PyQt6/pyqtgraph not installed")
@@ -54,6 +56,21 @@ class GuiSmokeTests(unittest.TestCase):
         server = FakeSCPIServer(respond)
         self.servers.append(server)
         return server.start()
+
+    def wait_until(self, condition, timeout=5.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            QApplication.processEvents()
+            if condition():
+                return
+            time.sleep(0.01)
+        self.fail("condition not reached")
+
+    def wait_idle(self):
+        """Run the event loop until queued commands and the measurement are done."""
+        worker = self.window._worker
+        self.wait_until(lambda: self.window._commands_idle()
+                        and (worker is None or not worker.isRunning()))
 
     def test_schematic_dialog_construction(self):
         dialog = RoutingSchematicDialog(MockAFMClient())
@@ -141,6 +158,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.window.gain_ch.setCurrentIndex(0)
         self.window.gain_val.setCurrentIndex(7)
         self.window._on_gain_set()
+        self.wait_idle()
 
         message = self.window.statusBar().currentMessage()
         self.assertIn("Channel 1 set to x16", message)
@@ -163,6 +181,7 @@ class GuiSmokeTests(unittest.TestCase):
         # The refresh after connect / init / measure must not erase their message
         self.window.statusBar().showMessage("Measurement complete - 32 points in 1.23s")
         self.window._on_refresh_status()
+        self.wait_idle()
         self.assertEqual(self.window.statusBar().currentMessage(),
                          "Measurement complete - 32 points in 1.23s")
 
@@ -172,6 +191,7 @@ class GuiSmokeTests(unittest.TestCase):
             "OVERDRIVE=0 SAT=0 PROTECT=1\n"))
 
         self.window._on_refresh_status()
+        self.wait_idle()
         self.assertEqual(self.window.adc_status_label.text(), "OK")
         self.assertIn("1,3", self.window.adc_status_label.toolTip())
         self.assertTrue(self.window.adc_protect_check.isChecked())
@@ -182,6 +202,7 @@ class GuiSmokeTests(unittest.TestCase):
             "OVERDRIVE=1 SAT=1 PROTECT=0\n"))
 
         self.window._on_refresh_status()
+        self.wait_idle()
         text = self.window.adc_status_label.text()
         self.assertIn("SATURATED", text)
         self.assertIn("overdrive risk", text)
@@ -194,6 +215,7 @@ class GuiSmokeTests(unittest.TestCase):
             lambda command, handler: "OK HW_INIT=1 BOARD=1 BUSY=0 DEC=64\n")
 
         self.window._on_refresh_status()
+        self.wait_idle()
         self.assertEqual(self.window.adc_status_label.text(), "not monitored")
         self.assertTrue(self.window.adc_protect_check.isChecked())
 
@@ -202,6 +224,7 @@ class GuiSmokeTests(unittest.TestCase):
             "OK HW_INIT=1 BOARD=1 BUSY=0 DEC=64 MODE=FULL LOOP=1,3 "
             "OVERDRIVE=1 SAT=0 PROTECT=1\n"))
         self.window._on_refresh_status()
+        self.wait_idle()
         self.assertIn("overdrive risk", self.window.adc_status_label.text())
 
         self.window._update_connection_ui(False)
@@ -222,6 +245,7 @@ class GuiSmokeTests(unittest.TestCase):
 
         self.connect_window(respond)
         self.window._on_refresh_status()
+        self.wait_idle()
 
         with mock.patch("afm_gui.QMessageBox") as box:
             # Declined: nothing sent, box ticked again
@@ -233,6 +257,7 @@ class GuiSmokeTests(unittest.TestCase):
             # Confirmed: override sent and shown
             box.question.return_value = box.StandardButton.Yes
             self.window.adc_protect_check.setChecked(False)
+            self.wait_idle()
             self.assertIn("BOARD:ADC:PROTECT OFF", commands)
             self.assertFalse(self.window.adc_protect_check.isChecked())
             self.assertIn("protection OFF", self.window.adc_status_label.text())
@@ -250,6 +275,7 @@ class GuiSmokeTests(unittest.TestCase):
 
         self.connect_window(respond)
         self.window._on_refresh_status()
+        self.wait_idle()
         self.assertAlmostEqual(self.window.sample_gain_spin.value(), 0.01)
         self.assertIn("Sample gain: 0.01", self.window.adc_status_label.toolTip())
 
@@ -259,6 +285,7 @@ class GuiSmokeTests(unittest.TestCase):
 
         self.window.sample_gain_spin.setValue(0.1)
         self.window.sample_gain_spin.editingFinished.emit()
+        self.wait_idle()
         self.assertIn("BOARD:ADC:SAMPLEGAIN 0.1", commands)
         self.assertAlmostEqual(self.window.sample_gain_spin.value(), 0.1)
 
@@ -297,6 +324,7 @@ class GuiSmokeTests(unittest.TestCase):
 
         try:
             self.window._on_refresh_status()
+            self.wait_idle()
         finally:
             release.set()
 
@@ -398,7 +426,8 @@ class GuiSmokeTests(unittest.TestCase):
         self.window._update_connection_ui(True)
 
         self.window._on_measure()
-        self.assertFalse(self.window.measure_btn.isEnabled())
+        self.assertIn("Cancel", self.window.measure_btn.text())
+        self.assertFalse(self.window.init_hw_btn.isEnabled())
 
         deadline = time.time() + 10.0
         while time.time() < deadline and self.window._last_spectrum is None:
@@ -408,6 +437,154 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIsNotNone(self.window._last_spectrum)
         self.assertEqual(self.window._last_spectrum.num_points, 2)
         self.assertTrue(self.window.measure_btn.isEnabled())
+
+    def test_control_commands_run_off_the_gui_thread(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def respond(command, handler):
+            if command.startswith("BOARD:MUX:ROUTE"):
+                release.wait(5.0)
+            return "OK\n"
+
+        self.connect_window(respond)
+        start = time.time()
+        self.window._on_mux_set()
+        self.assertLess(time.time() - start, 0.5)
+        self.assertFalse(self.window._commands_idle())
+
+        release.set()
+        self.wait_idle()
+        self.assertEqual(self.window.statusBar().currentMessage(), "MUX: Input 1 -> Output 1")
+
+    def test_control_commands_run_in_order(self):
+        commands = []
+
+        def respond(command, handler):
+            commands.append(command)
+            return "OK 1\n"
+
+        self.connect_window(respond)
+        self.window._on_mux_set()
+        self.window._on_gain_set()
+        self.window._on_mux_disconnect()
+        self.wait_idle()
+        self.assertEqual(commands, ["BOARD:MUX:ROUTE 1,1", "BOARD:GAIN 1,3",
+                                    "BOARD:MUX:DISCONNECT 1"])
+
+    def test_cancel_measurement_reconnects(self):
+        started = threading.Event()
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def respond(command, handler):
+            if command.startswith("MEASURE:SWEEP"):
+                started.set()
+                release.wait(5.0)
+                return spectrum_response([(1.0, 0.5, 0.0)])
+            if command == "SYSTEM:STATUS?":
+                return "OK HW_INIT=1 BOARD=0 BUSY=0 DEC=64\n"
+            return "OK\n"
+
+        first_client = self.connect_window(respond)
+        self.window.radio_sweep.setChecked(True)
+        with mock.patch("afm_gui.QMessageBox") as box:
+            self.window._on_measure()
+            self.assertTrue(self.window.measure_btn.isEnabled())
+            self.assertTrue(started.wait(2.0))
+
+            self.window._on_measure()  # Cancel
+            self.wait_until(lambda: self.window.client is not first_client
+                            and self.window.client.is_connected)
+            self.wait_idle()
+            box.critical.assert_not_called()
+
+        self.assertIsNone(self.window._last_spectrum)
+        self.assertEqual(self.window.connect_btn.text(), "Disconnect")
+        self.assertIn("Measure", self.window.measure_btn.text())
+        self.assertTrue(self.window.measure_btn.isEnabled())
+
+    def test_schematic_dialog_is_reused_and_refreshed_only_when_shown(self):
+        commands = []
+
+        def respond(command, handler):
+            commands.append(command)
+            if command == "BOARD:STATUS?":
+                return "OK LINES 2\nRouting:\n  OUT1 <- IN2\n"
+            return "OK HW_INIT=1 BOARD=1 BUSY=0 DEC=64 MODE=FULL\n"
+
+        self.connect_window(respond)
+        self.window._on_open_schematic()
+        self.wait_idle()
+        dialog = self.window._schematic_dialog
+        self.assertEqual(dialog.routing[1], 2)
+        dialog.close()
+
+        self.window._on_open_schematic()
+        self.wait_idle()
+        self.assertIs(self.window._schematic_dialog, dialog)
+        self.assertEqual(len(self.window.findChildren(RoutingSchematicDialog)), 1)
+        self.assertEqual(commands.count("BOARD:STATUS?"), 2)
+
+        dialog.close()
+        self.window._on_connected("welcome")
+        self.wait_idle()
+        self.assertEqual(commands.count("BOARD:STATUS?"), 2)
+        self.assertNotIn("SYSTEM:MODE?", commands)
+
+    def test_schematic_lost_connection_reaches_main_window(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def respond(command, handler):
+            if command == "BOARD:STATUS?":
+                release.wait(5.0)
+            return "OK HW_INIT=1 BOARD=1 BUSY=0 DEC=64 MODE=FULL\n"
+
+        server = self.make_server(respond)
+        client = AFMClient("127.0.0.1", server.port, timeout=0.3)
+        client.connect()
+        self.addCleanup(client.disconnect)
+        self.window.client = client
+        self.window._update_connection_ui(True)
+
+        self.window._on_open_schematic()
+        self.wait_idle()
+        dialog = self.window._schematic_dialog
+        self.assertEqual(self.window.connect_btn.text(), "Connect")
+        self.assertIsNone(dialog.client)
+        self.assertIn("Status error", dialog.status_label.text())
+        dialog.close()
+
+    def test_schematic_rp_only_is_not_interactive(self):
+        client = MockAFMClient()
+        calls = []
+        client.set_mux = lambda out, inp: calls.append((out, inp))
+        dialog = RoutingSchematicDialog(client, mode=OperatingMode.RP_ONLY)
+        dialog.on_node_clicked(SchemNode.KIND_OUT, 1)
+        dialog.on_node_clicked(SchemNode.KIND_IN, 2)
+        self.assertEqual(calls, [])
+        self.assertIsNone(dialog.selecting_out)
+        self.assertIn("RP-only", dialog.status_label.text())
+        dialog.close()
+
+    def test_schematic_click_while_offline_is_refused(self):
+        dialog = RoutingSchematicDialog(MockAFMClient())
+        dialog.set_client(None)
+        with mock.patch("afm_schematic.QMessageBox") as box:
+            dialog.on_node_clicked(SchemNode.KIND_OUT, 1)
+            dialog.on_route_clicked(1)
+            box.question.assert_not_called()
+        self.assertIsNone(dialog.selecting_out)
+        self.assertEqual(dialog.status_label.text(), "Not connected")
+        dialog.close()
+
+    def test_schematic_mock_routes_without_a_worker(self):
+        dialog = RoutingSchematicDialog(MockAFMClient())
+        dialog.on_node_clicked(SchemNode.KIND_OUT, 2)
+        dialog.on_node_clicked(SchemNode.KIND_IN, 3)
+        self.assertEqual(dialog.routing[2], 3)
+        dialog.close()
 
 
 if __name__ == "__main__":

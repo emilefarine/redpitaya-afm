@@ -151,5 +151,67 @@ class AdcProtectionTests(unittest.TestCase):
         self.assertIn("Usage", self.run_command(shell, "do_adc_sample_gain", "weak"))
 
 
+class ConnectionHintTests(unittest.TestCase):
+    def run_line(self, shell, line):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            shell.postcmd(shell.onecmd(line), line)
+        return buffer.getvalue()
+
+    def test_lost_connection_points_to_connect(self):
+        server = FakeSCPIServer(lambda command, handler: b"").start()
+        self.addCleanup(server.stop)
+        client = AFMClient("127.0.0.1", server.port, timeout=0.2)
+        client.connect()
+        shell = AFMShell(client)
+        output = self.run_line(shell, "ping")
+        self.assertIn("Read timeout", output)
+        self.assertIn("Use 'connect", output)
+
+    def test_local_commands_print_no_hint(self):
+        shell = AFMShell(AFMClient("127.0.0.1", 1))
+        for line in ("help", "data_show", "quit"):
+            with self.subTest(line=line):
+                self.assertNotIn("Use 'connect", self.run_line(shell, line))
+
+
+class BoardCommandTests(unittest.TestCase):
+    def make_shell(self, respond):
+        server = FakeSCPIServer(respond).start()
+        self.addCleanup(server.stop)
+        client = AFMClient("127.0.0.1", server.port, timeout=2.0)
+        client.connect()
+        self.addCleanup(client.disconnect)
+        return AFMShell(client)
+
+    def test_board_command_sends_no_status_query_first(self):
+        commands = []
+
+        def respond(command, handler):
+            commands.append(command)
+            return "OK\n"
+
+        shell = self.make_shell(respond)
+        with redirect_stdout(io.StringIO()):
+            shell.do_mux("1 2")
+        self.assertEqual(commands, ["BOARD:MUX:ROUTE 1,2"])
+
+    def test_board_error_is_shown(self):
+        shell = self.make_shell(
+            lambda command, handler: "ERR_HARDWARE: Electronic board disabled (RP-only mode)\n")
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            shell.do_gain("1 3")
+        self.assertIn("RP-only mode", buffer.getvalue())
+
+    def test_raw_board_status_prints_the_block(self):
+        shell = self.make_shell(
+            lambda command, handler: "OK LINES 2\nRouting:\n  OUT1 <- IN1\n")
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            shell.default("BOARD:STATUS?")
+        self.assertIn("OUT1 <- IN1", buffer.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

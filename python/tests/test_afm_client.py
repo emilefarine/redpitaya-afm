@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Unit tests for the AFM SCPI client library (no hardware required)."""
 
+import gc
+import socket
 import socketserver
 import sys
 import threading
 import unittest
+import warnings
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -455,12 +458,16 @@ class OperatingModeTests(ClientTestCase):
         client = self.make_client(server)
         self.assertEqual(client.get_mode(), OperatingMode.RP_ONLY)
 
-    def test_get_mode_unknown_replies_default_full(self):
+    def test_get_mode_unknown_reply_stays_distinct_from_full(self):
         server = self.make_server(
             lambda command, handler: "OK WEIRD\n"
             if command == "SYSTEM:MODE?" else "ERR_SYNTAX: unknown\n")
         client = self.make_client(server)
-        self.assertEqual(client.get_mode(), OperatingMode.FULL)
+        self.assertEqual(client.get_mode(), OperatingMode.UNKNOWN)
+
+    def test_status_with_unknown_mode(self):
+        status = SystemStatus.from_response("HW_INIT=1 BOARD=0 BUSY=0 DEC=64 MODE=WEIRD")
+        self.assertEqual(status.mode, OperatingMode.UNKNOWN)
 
     def test_get_mode_legacy_server_defaults_full(self):
         server = self.make_server(
@@ -560,6 +567,78 @@ class AdcProtectionTests(ClientTestCase):
         self.assertEqual(client.set_adc_sample_gain(0.01), "0.01")
         self.assertEqual(client.get_adc_sample_gain(), 0.01)
         self.assertEqual(commands, ["BOARD:ADC:SAMPLEGAIN 0.01", "BOARD:ADC:SAMPLEGAIN?"])
+
+
+class SweepTimeoutTests(unittest.TestCase):
+    def test_timeout_follows_decimation(self):
+        client = AFMClient("127.0.0.1", timeout=10.0)
+        acquisition = 4096 * 8192 * 1024 / 125e6
+        longest = client.sweep_timeout(4096, 1024)
+        self.assertGreater(longest, acquisition)
+        self.assertLess(longest, 15 * 60)  # was 2.3 hours
+        self.assertLess(client.sweep_timeout(101, 64), 60)
+
+    def test_timeout_never_below_client_timeout(self):
+        client = AFMClient("127.0.0.1", timeout=100.0)
+        self.assertEqual(client.sweep_timeout(1, 16), 100.0)
+
+    def test_invalid_decimation_counts_as_slowest(self):
+        client = AFMClient("127.0.0.1")
+        slowest = client.sweep_timeout(100, 1024)
+        for decimation in (None, "64", float("nan"), 4096):
+            with self.subTest(decimation=decimation):
+                self.assertEqual(client.sweep_timeout(100, decimation), slowest)
+
+    def test_point_count_matches_server(self):
+        self.assertEqual(AFMClient.sweep_points(10, 1), 11)
+        self.assertEqual(AFMClient.sweep_points(1, 0.1), 11)
+        self.assertEqual(AFMClient.sweep_points(0.3, 0.1), 4)
+        self.assertEqual(AFMClient.sweep_points(1e9, 1), AFMClient.MAX_SWEEP_POINTS)
+        self.assertEqual(AFMClient.sweep_points(float("nan"), 1), 1)
+        self.assertEqual(AFMClient.sweep_points(10, 0), 1)
+
+
+class ConnectionHealthTests(ClientTestCase):
+    def test_keepalive_is_enabled(self):
+        server = self.make_server(lambda command, handler: "OK PONG\n")
+        client = self.make_client(server)
+        self.assertNotEqual(
+            client._socket.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE), 0)
+
+    def test_sweep_uses_the_decimation_timeout(self):
+        server = self.make_server(lambda command, handler: spectrum_response([(1.0, 1.0, 0.0)]))
+        client = self.make_client(server)
+        seen = {}
+        read = client._read_spectrum_response
+
+        def capture(timeout=None):
+            seen["timeout"] = timeout
+            return read(timeout=timeout)
+
+        client._read_spectrum_response = capture
+        client.measure_sweep(200, 10, 1, 256)
+        self.assertEqual(seen["timeout"], client.sweep_timeout(11, 256))
+
+    def test_failed_connect_closes_the_socket(self):
+        client = AFMClient("127.0.0.1", 1, timeout=0.5)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            with self.assertRaises(AFMConnectionError):
+                client.connect()
+            gc.collect()
+        self.assertFalse([w for w in caught if issubclass(w.category, ResourceWarning)])
+        self.assertFalse(client.is_connected)
+
+    def test_send_command_reads_a_framed_text_reply(self):
+        def respond(command, handler):
+            if command == "BOARD:STATUS?":
+                return "OK LINES 2\nRouting:\n  OUT1 <- IN1\n"
+            return "OK PONG\n"
+
+        server = self.make_server(respond)
+        client = self.make_client(server)
+        self.assertEqual(client.send_command("BOARD:STATUS?"), "Routing:\n  OUT1 <- IN1")
+        self.assertTrue(client.ping())
 
 
 if __name__ == "__main__":
