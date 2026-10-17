@@ -538,7 +538,7 @@ TEST_F(CommandHandlerTest, MeasSincHappyPathReturnsConsistentSpectrum)
   EXPECT_EQ(static_cast<size_t>(std::count(resp.begin(), resp.end(), '\n')), count + 1);
 }
 
-TEST_F(CommandHandlerTest, MeasSincTimeoutReturnsHardwareErrorAndResets)
+TEST_F(CommandHandlerTest, MeasSincTimeoutReturnsTimeoutErrorAndResets)
 {
   initHardware(true);
 
@@ -549,7 +549,7 @@ TEST_F(CommandHandlerTest, MeasSincTimeoutReturnsHardwareErrorAndResets)
   EXPECT_CALL(*m_rawHw, resetMeasurement()).Times(AtLeast(1)).WillRepeatedly(Return(true));
 
   std::string resp = send("MEASURE:SINC 200,100");
-  EXPECT_NE(resp.find("ERR_HARDWARE"), std::string::npos);
+  EXPECT_EQ(resp.rfind("ERR_TIMEOUT", 0), 0u) << resp;
   EXPECT_NE(resp.find("timeout"), std::string::npos);
   EXPECT_FALSE(m_handler->getStatus().measurementInProgress);
 }
@@ -662,7 +662,7 @@ TEST_F(CommandHandlerTest, SweepRejectsTooManyPoints)
   EXPECT_EQ(resp.find("e+"), std::string::npos);
 }
 
-TEST_F(CommandHandlerTest, SweepTimeoutReturnsHardwareErrorAndResets)
+TEST_F(CommandHandlerTest, SweepTimeoutReturnsTimeoutErrorAndResets)
 {
   initHardware(true);
 
@@ -673,7 +673,7 @@ TEST_F(CommandHandlerTest, SweepTimeoutReturnsHardwareErrorAndResets)
   EXPECT_CALL(*m_rawHw, resetMeasurement()).Times(AtLeast(1)).WillRepeatedly(Return(true));
 
   std::string resp = send("MEASURE:SWEEP 200,10");
-  EXPECT_NE(resp.find("ERR_HARDWARE"), std::string::npos);
+  EXPECT_EQ(resp.rfind("ERR_TIMEOUT", 0), 0u) << resp;
   EXPECT_NE(resp.find("timeout"), std::string::npos);
   EXPECT_FALSE(m_handler->getStatus().measurementInProgress);
 }

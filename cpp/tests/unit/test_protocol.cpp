@@ -283,7 +283,7 @@ TEST(ProtocolTest, StatusToStringCoversStatuses)
   EXPECT_STREQ(statusToString(ResponseStatus::OK), "OK");
   EXPECT_STREQ(statusToString(ResponseStatus::ERR_SYNTAX), "ERR_SYNTAX");
   EXPECT_STREQ(statusToString(ResponseStatus::ERR_HARDWARE), "ERR_HARDWARE");
-  EXPECT_STREQ(statusToString(ResponseStatus::ERR_BUSY), "ERR_BUSY");
+  EXPECT_STREQ(statusToString(ResponseStatus::ERR_TIMEOUT), "ERR_TIMEOUT");
 }
 
 TEST(ProtocolTest, StatusToStringUnknownStatus)

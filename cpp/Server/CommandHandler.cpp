@@ -221,6 +221,7 @@ std::string CommandHandler::_handleSystStatus(const ParsedCommand& cmd)
   std::ostringstream oss;
   oss << "HW_INIT=" << (m_status.hardwareInitialized ? "1" : "0")
       << " BOARD=" << (m_status.boardConnected ? "1" : "0")
+      // Always 0: commands run one at a time, so STATUS never runs during a measurement
       << " BUSY=" << (m_status.measurementInProgress ? "1" : "0")
       << " DEC=" << m_status.currentDecimation
       << " MODE=" << operatingModeToString(m_status.mode)
@@ -716,7 +717,7 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
   // Wait for completion (blocking)
   if (!_waitForMeasurement())
   {
-    return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Measurement timeout");
+    return buildErrorResponse(ResponseStatus::ERR_TIMEOUT, "Measurement timeout");
   }
 
   std::vector<float> acquired(static_cast<size_t>(numSamples));
@@ -876,7 +877,7 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
 
     if (!_waitForMeasurement())
     {
-      return buildErrorResponse(ResponseStatus::ERR_HARDWARE,
+      return buildErrorResponse(ResponseStatus::ERR_TIMEOUT,
                                 "Measurement timeout at " + std::to_string(freqKHz) + " kHz");
     }
 
