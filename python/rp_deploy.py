@@ -51,9 +51,9 @@ def _is_build_artifact(rel_path):
 def sync_cpp_files(scp, ssh) -> bool:
     """Mirror the local C++ project to the Red Pitaya.
 
-    Deletes obsolete remote files (keeping build artifacts) and copies every
-    local file. Returns True when every file was copied and every obsolete
-    file was removed.
+    Deletes obsolete remote files and copies every local file. Build artifacts
+    (out/, .o, .csv) are skipped on both sides. Returns True when every file
+    was copied and every obsolete file was removed.
     """
     failures = 0
 
@@ -65,12 +65,15 @@ def sync_cpp_files(scp, ssh) -> bool:
 
     for root, dirs, files in os.walk(LOCAL_PROJECT):
         rel_dir = os.path.relpath(root, LOCAL_PROJECT)
-        if rel_dir != ".":
+        if rel_dir == ".":
+            dirs[:] = [d for d in dirs if not _is_build_artifact(d)]
+        else:
             local_dirs.add(rel_dir.replace("\\", "/"))
 
         for file in files:
-            rel_path = os.path.relpath(os.path.join(root, file), LOCAL_PROJECT)
-            local_files.add(rel_path.replace("\\", "/"))
+            rel_path = os.path.relpath(os.path.join(root, file), LOCAL_PROJECT).replace("\\", "/")
+            if not _is_build_artifact(rel_path):
+                local_files.add(rel_path)
 
     print(f"Found {len(local_files)} local files in {len(local_dirs)} directories")
 
@@ -582,4 +585,6 @@ def main():
     return exit_code
 
 if __name__ == "__main__":
+    # Remote output such as the systemctl status bullet must not crash a cp1252 console
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main())
