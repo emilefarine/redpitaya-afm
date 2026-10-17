@@ -63,12 +63,27 @@ class ResolveBitfileTests(unittest.TestCase):
             self.assertEqual(Path(binpath).name, "new.bit.bin")
 
 
+class RecordingSCP:
+    def __init__(self):
+        self.copies = []
+
+    def put(self, local, remote):
+        self.copies.append((local, remote))
+
+
 class SyncCppFilesTests(unittest.TestCase):
-    def _run_sync(self, scp):
+    def _run_sync(self, scp, files=("Server/main.cpp",)):
+        self.commands = []
+
+        def run_remote(ssh, command):
+            self.commands.append(command)
+            return 0, "", ""
+
         with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / "Server" / "main.cpp"
-            source.parent.mkdir()
-            source.write_text("int main() {}")
+            for rel_path in files:
+                source = Path(tmp) / rel_path
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("x")
 
             originals = {
                 "LOCAL_PROJECT": rp_deploy.LOCAL_PROJECT,
@@ -77,7 +92,7 @@ class SyncCppFilesTests(unittest.TestCase):
             }
             rp_deploy.LOCAL_PROJECT = tmp
             rp_deploy.REMOTE_PROJECT = "/remote/cpp"
-            rp_deploy.run_remote = lambda ssh, command: (0, "", "")
+            rp_deploy.run_remote = run_remote
             try:
                 with redirect_stdout(io.StringIO()):
                     return rp_deploy.sync_cpp_files(scp, object())
@@ -86,17 +101,19 @@ class SyncCppFilesTests(unittest.TestCase):
                     setattr(rp_deploy, name, value)
 
     def test_success_returns_true(self):
-        class RecordingSCP:
-            def __init__(self):
-                self.copies = []
-
-            def put(self, local, remote):
-                self.copies.append((local, remote))
-
         scp = RecordingSCP()
         self.assertTrue(self._run_sync(scp))
         self.assertEqual(len(scp.copies), 1)
         self.assertTrue(scp.copies[0][1].endswith("Server/main.cpp"))
+
+    def test_local_build_outputs_are_not_copied(self):
+        scp = RecordingSCP()
+        files = ("Server/main.cpp", "Server/main.o", "Tools/oled-ip.service",
+                 "out/host/unit_tests.exe", "out/afm_server", "run.csv")
+        self.assertTrue(self._run_sync(scp, files))
+        self.assertEqual(sorted(remote for _, remote in scp.copies),
+                         ["/remote/cpp/Server/main.cpp", "/remote/cpp/Tools/oled-ip.service"])
+        self.assertFalse(any("/out" in command for command in self.commands))
 
     def test_scp_failure_returns_false(self):
         class FailingSCP:
