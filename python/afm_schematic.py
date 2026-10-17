@@ -11,7 +11,9 @@ connectors - and lets the user route the crossbar by clicking:
   - Right-click or press Esc to cancel an ongoing selection.
 
 The view re-reads BOARD:STATUS? on open, after every action and via the
-Refresh button, so it always mirrors the real board state.
+Refresh button, so it always mirrors the real board state. Inside the GUI the
+board commands run on the GUI's command worker, so a silent server never
+freezes the dialog.
 
 Standalone preview without hardware:
     python afm_schematic.py
@@ -253,9 +255,18 @@ class SchemEdge(QGraphicsPathItem):
 class RoutingSchematicDialog(QDialog):
     """Schematic of Red Pitaya -> interface board -> front panel."""
 
-    def __init__(self, client, parent=None):
+    def __init__(self, client, parent=None, run_command=None, mode=OperatingMode.FULL):
+        """
+        Args:
+            client: Connected client, or None when offline
+            run_command: run_command(call, on_done, on_error); runs the call
+                at once when not given
+            mode: Server operating mode, known from SYSTEM:STATUS?
+        """
         super().__init__(parent)
         self.client = client
+        self.mode = mode
+        self._run_command = run_command or self._run_now
         self.routing = {i: None for i in range(1, 5)}
         self.gains = {i: "?" for i in range(1, 5)}
         self.selecting_out = None
@@ -468,37 +479,51 @@ class RoutingSchematicDialog(QDialog):
         """Point the dialog at a connected client, or None when offline."""
         self.client = client
 
-    def refresh_state(self):
-        if self.client is None:
-            self.status_label.setText("Not connected")
-            self.status_label.setStyleSheet(f"color: {RED};")
-            return
+    def set_mode(self, mode):
+        self.mode = mode
+
+    @staticmethod
+    def _run_now(call, on_done, on_error):
         try:
-            mode = self.client.get_mode()
-        except AFMError:
-            mode = None
-        if mode == OperatingMode.RP_ONLY:
+            result = call()
+        except AFMError as exc:
+            on_error(exc)
+            return
+        on_done(result)
+
+    def _show_message(self, text, color):
+        self.status_label.setText(text)
+        self.status_label.setStyleSheet(f"color: {color};")
+
+    def _board_usable(self):
+        """Show why the board cannot be used, if it cannot."""
+        if self.client is None:
+            self._show_message("Not connected", RED)
+            return False
+        if self.mode == OperatingMode.RP_ONLY:
+            self._show_message("RP-only mode: board routing unavailable", TEXT_DIM)
+            return False
+        return True
+
+    def refresh_state(self):
+        if not self._board_usable():
             self.routing = {i: None for i in range(1, 5)}
             self.gains = {i: "-" for i in range(1, 5)}
             self.cancel_selection()
             self._redraw_routes()
-            self.status_label.setText("RP-only mode: board routing unavailable")
-            self.status_label.setStyleSheet(f"color: {TEXT_DIM};")
             return
-        try:
-            state = self.client.get_board_state()
-        except AFMError as exc:
-            self.status_label.setText(f"Status error: {exc}")
-            self.status_label.setStyleSheet(f"color: {RED};")
-            return
+        client = self.client
+        self._run_command(lambda: client.get_board_state(), self._apply_state,
+                          lambda exc: self._show_message(f"Status error: {exc}", RED))
+
+    def _apply_state(self, state):
         self.routing = {i: state.routing.get(i) for i in range(1, 5)}
         self.gains = {i: state.gains.get(i, "?") for i in range(1, 5)}
         self.cancel_selection()
         self._redraw_routes()
         parts = [f"OUT{i}←{'IN' + str(v) if v else 'open'}"
                  for i, v in self.routing.items()]
-        self.status_label.setText("Board state:   " + "    ".join(parts))
-        self.status_label.setStyleSheet(f"color: {TEXT};")
+        self._show_message("Board state:   " + "    ".join(parts), TEXT)
 
     def _redraw_routes(self):
         for idx in range(1, 5):
@@ -541,6 +566,9 @@ class RoutingSchematicDialog(QDialog):
     # Interaction
     # ---------------------------------------------------------------
     def on_node_clicked(self, kind, index):
+        if not self._board_usable():
+            self.cancel_selection()
+            return
         if kind == SchemNode.KIND_OUT:
             if self.selecting_out == index:
                 self.cancel_selection()
@@ -566,7 +594,8 @@ class RoutingSchematicDialog(QDialog):
                 self.status_label.setStyleSheet(f"color: {TEXT_DIM};")
 
     def on_route_clicked(self, out):
-        self._confirm_disconnect(out)
+        if self._board_usable():
+            self._confirm_disconnect(out)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.RightButton \
@@ -588,15 +617,11 @@ class RoutingSchematicDialog(QDialog):
                 node.set_candidate(False)
 
     def _route(self, out, inp):
-        try:
-            self.client.set_mux(out, inp)
-        except AFMError as exc:
-            self.status_label.setText(f"Route error: {exc}")
-            self.status_label.setStyleSheet(f"color: {RED};")
-            self.cancel_selection()
-            return
+        client = self.client
         self.cancel_selection()
-        self.refresh_state()
+        self._run_command(lambda: client.set_mux(out, inp),
+                          lambda _: self.refresh_state(),
+                          lambda exc: self._show_message(f"Route error: {exc}", RED))
 
     def _confirm_disconnect(self, out):
         reply = QMessageBox.question(
@@ -605,13 +630,10 @@ class RoutingSchematicDialog(QDialog):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
             return
-        try:
-            self.client.disconnect_mux(out)
-        except AFMError as exc:
-            self.status_label.setText(f"Disconnect error: {exc}")
-            self.status_label.setStyleSheet(f"color: {RED};")
-            return
-        self.refresh_state()
+        client = self.client
+        self._run_command(lambda: client.disconnect_mux(out),
+                          lambda _: self.refresh_state(),
+                          lambda exc: self._show_message(f"Disconnect error: {exc}", RED))
 
 
 # ---------------------------------------------------------------------------
@@ -624,9 +646,6 @@ class MockAFMClient:
         self.is_connected = True
         self._routing = {1: None, 2: None, 3: None, 4: None}
         self._gains = {1: "1", 2: "2", 3: "1", 4: "1/8"}
-
-    def get_mode(self) -> OperatingMode:
-        return OperatingMode.FULL
 
     def get_board_status(self) -> str:
         lines = ["=== MUX Status ===", "Routing:"]
