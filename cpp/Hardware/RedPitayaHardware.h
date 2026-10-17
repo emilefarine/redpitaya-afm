@@ -65,7 +65,7 @@ private:
   static constexpr uint32_t REG_DELAY = 3;
   static constexpr uint32_t REG_SIG_SIZE = 4;
   static constexpr uint32_t REG_END_MEASURE = 5;
-  static constexpr uint32_t REG_COUNT_MEASURE = 6; // Acquired sample count (16-bit, RTL)
+  static constexpr uint32_t REG_COUNT_MEASURE = 6; // Acquired count, reads 0 once acquisition stops
   static constexpr uint32_t REG_VERSION = 7;       // Read-only version register (date of bitfile)
   static constexpr uint32_t REG_DECIMATION = 8;
   static constexpr uint32_t REG_STATUS = 9; // [0]=busy, [1]=ps_access_denied (write clears sticky)

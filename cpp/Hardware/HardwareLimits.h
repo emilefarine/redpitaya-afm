@@ -37,12 +37,4 @@ constexpr bool isValidDelaySamples(uint32_t delaySamples)
   return delaySamples <= MAX_DELAY_SAMPLES;
 }
 
-// The RTL count_measure is a 16-bit counter that wraps to 0 after exactly
-// 65536 samples and is currently cleared when acquisition stops. A zero
-// reading therefore means "unknown"; any other value must match the request.
-constexpr bool isCountConsistent(uint32_t acquiredCount, size_t expectedCount)
-{
-  return acquiredCount == 0 || acquiredCount == expectedCount;
-}
-
 } // namespace HardwareLimits
