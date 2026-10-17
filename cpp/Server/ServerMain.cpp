@@ -207,6 +207,7 @@ int main(int argc, char* argv[])
     // Set command callback
     server.setCommandHandler([&commandHandler](const AFM::ParsedCommand& cmd)
                              { return commandHandler->handleCommand(cmd); });
+    commandHandler->setCancelCheck([&server]() { return server.isCommandCancelled(); });
 
     std::cout << "[Main] Starting server on port " << options.port << "...\n" << std::endl;
 
@@ -219,15 +220,16 @@ int main(int argc, char* argv[])
 
     std::cout << "[Main] Server running. Press Ctrl+C to stop.\n" << std::endl;
 
-    // Main event loop: wait for shutdown signal
-    // This is safer than blocking in server.start() - we can respond to signals cleanly
-    while (!g_stopSignal.load())
+    // Run until Ctrl+C / SIGTERM, or until SYSTEM:SHUTDOWN stops the server thread
+    while (!g_stopSignal.load() && server.isRunning())
     {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
     // Graceful shutdown (safe to call here, not in signal handler)
-    std::cout << "\n[Main] Shutdown signal received. Stopping server..." << std::endl;
+    std::cout << "\n[Main] "
+              << (g_stopSignal.load() ? "Shutdown signal received" : "Shutdown requested by client")
+              << ". Stopping server..." << std::endl;
     server.stop();
     std::cout << "[Main] Server stopped." << std::endl;
   }

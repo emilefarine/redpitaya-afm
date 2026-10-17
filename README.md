@@ -238,6 +238,10 @@ For `MEASURE:SWEEP`, `phase_rad` is the phase of the response relative to the ex
 
 `BOARD:STATUS?` returns `OK LINES <N>` followed by the `N` lines of the board status block.
 
+A measurement that does not complete returns `ERR_TIMEOUT`. A `MEASURE:SWEEP` stops between
+points with `ERR_ABORTED` when the client closes the connection or the server is stopping.
+`SYSTEM:SHUTDOWN` ends the server process.
+
 ## MUX board firmware
 
 The analog board is controlled by an on-board **LPC1114** microcontroller (MUX routing,

@@ -283,7 +283,8 @@ TEST(ProtocolTest, StatusToStringCoversStatuses)
   EXPECT_STREQ(statusToString(ResponseStatus::OK), "OK");
   EXPECT_STREQ(statusToString(ResponseStatus::ERR_SYNTAX), "ERR_SYNTAX");
   EXPECT_STREQ(statusToString(ResponseStatus::ERR_HARDWARE), "ERR_HARDWARE");
-  EXPECT_STREQ(statusToString(ResponseStatus::ERR_BUSY), "ERR_BUSY");
+  EXPECT_STREQ(statusToString(ResponseStatus::ERR_TIMEOUT), "ERR_TIMEOUT");
+  EXPECT_STREQ(statusToString(ResponseStatus::ERR_ABORTED), "ERR_ABORTED");
 }
 
 TEST(ProtocolTest, StatusToStringUnknownStatus)
@@ -333,7 +334,7 @@ TEST(ProtocolTest, ServerConfigConstants)
 
 TEST(ProtocolTest, VersionInfoToString)
 {
-  EXPECT_EQ(VersionInfo::toString(), "2.8.0");
+  EXPECT_EQ(VersionInfo::toString(), "2.9.0");
 }
 
 TEST(ProtocolTest, BuildTextResponseCountsLines)

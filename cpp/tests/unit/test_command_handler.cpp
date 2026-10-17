@@ -538,7 +538,7 @@ TEST_F(CommandHandlerTest, MeasSincHappyPathReturnsConsistentSpectrum)
   EXPECT_EQ(static_cast<size_t>(std::count(resp.begin(), resp.end(), '\n')), count + 1);
 }
 
-TEST_F(CommandHandlerTest, MeasSincTimeoutReturnsHardwareErrorAndResets)
+TEST_F(CommandHandlerTest, MeasSincTimeoutReturnsTimeoutErrorAndResets)
 {
   initHardware(true);
 
@@ -549,7 +549,7 @@ TEST_F(CommandHandlerTest, MeasSincTimeoutReturnsHardwareErrorAndResets)
   EXPECT_CALL(*m_rawHw, resetMeasurement()).Times(AtLeast(1)).WillRepeatedly(Return(true));
 
   std::string resp = send("MEASURE:SINC 200,100");
-  EXPECT_NE(resp.find("ERR_HARDWARE"), std::string::npos);
+  EXPECT_EQ(resp.rfind("ERR_TIMEOUT", 0), 0u) << resp;
   EXPECT_NE(resp.find("timeout"), std::string::npos);
   EXPECT_FALSE(m_handler->getStatus().measurementInProgress);
 }
@@ -662,7 +662,7 @@ TEST_F(CommandHandlerTest, SweepRejectsTooManyPoints)
   EXPECT_EQ(resp.find("e+"), std::string::npos);
 }
 
-TEST_F(CommandHandlerTest, SweepTimeoutReturnsHardwareErrorAndResets)
+TEST_F(CommandHandlerTest, SweepTimeoutReturnsTimeoutErrorAndResets)
 {
   initHardware(true);
 
@@ -673,9 +673,59 @@ TEST_F(CommandHandlerTest, SweepTimeoutReturnsHardwareErrorAndResets)
   EXPECT_CALL(*m_rawHw, resetMeasurement()).Times(AtLeast(1)).WillRepeatedly(Return(true));
 
   std::string resp = send("MEASURE:SWEEP 200,10");
-  EXPECT_NE(resp.find("ERR_HARDWARE"), std::string::npos);
+  EXPECT_EQ(resp.rfind("ERR_TIMEOUT", 0), 0u) << resp;
   EXPECT_NE(resp.find("timeout"), std::string::npos);
   EXPECT_FALSE(m_handler->getStatus().measurementInProgress);
+}
+
+TEST_F(CommandHandlerTest, SweepStopsBetweenPointsWhenCancelled)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+
+  int checks = 0;
+  m_handler->setCancelCheck([&checks]() { return ++checks > 3; });
+  EXPECT_CALL(*m_rawHw, startMeasurement(_, _)).Times(3).WillRepeatedly(Return(true));
+  EXPECT_CALL(*m_rawHw, resetMeasurement()).Times(AtLeast(1)).WillRepeatedly(Return(true));
+
+  std::string resp = send("MEASURE:SWEEP 200,10"); // 11 points
+  EXPECT_EQ(resp, "ERR_ABORTED: Sweep cancelled after 3 points\n");
+  EXPECT_FALSE(m_handler->getStatus().measurementInProgress);
+}
+
+TEST_F(CommandHandlerTest, SweepCancelledBeforeFirstPointNeverStarts)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+
+  m_handler->setCancelCheck([]() { return true; });
+  EXPECT_CALL(*m_rawHw, startMeasurement(_, _)).Times(0);
+
+  EXPECT_EQ(send("MEASURE:SWEEP 200,10").rfind("ERR_ABORTED", 0), 0u);
+}
+
+TEST_F(CommandHandlerTest, SweepRunsToTheEndWhenNotCancelled)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+
+  int checks = 0;
+  m_handler->setCancelCheck([&checks]() { ++checks; return false; });
+
+  std::string resp = send("MEASURE:SWEEP 200,10");
+  ASSERT_EQ(resp.compare(0, 3, "OK "), 0) << resp;
+  EXPECT_EQ(checks, 11);
+}
+
+TEST_F(CommandHandlerTest, CancelCheckDoesNotAffectOtherCommands)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+
+  m_handler->setCancelCheck([]() { return true; });
+
+  EXPECT_EQ(send("MEASURE:SINC 200,100").compare(0, 3, "OK "), 0);
+  EXPECT_EQ(send("SYSTEM:PING").compare(0, 2, "OK"), 0);
 }
 
 TEST_F(CommandHandlerTest, SweepStepDoesNotOvershootStop)

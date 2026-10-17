@@ -91,6 +91,13 @@ public:
   }
 
   /**
+   * @brief True when the command in progress must stop: server stopping or client gone
+   *
+   * Call from the command handler only (server thread).
+   */
+  bool isCommandCancelled() const;
+
+  /**
    * @brief Send a message to the connected client
    * @param message Message to send
    * @return true if sent successfully
@@ -107,6 +114,11 @@ private:
    * @brief Accept and handle a client connection
    */
   void _acceptClient();
+
+  /**
+   * @brief Apply the timeout and keepalive options to the client socket
+   */
+  void _configureClientSocket();
 
   /**
    * @brief Handle client communication
