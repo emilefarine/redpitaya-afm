@@ -858,6 +858,12 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
 
   for (size_t point = 0; point < numPoints; ++point)
   {
+    if (m_cancelCheck && m_cancelCheck())
+    {
+      return buildErrorResponse(ResponseStatus::ERR_ABORTED,
+                                "Sweep cancelled after " + std::to_string(point) + " points");
+    }
+
     double freqKHz = std::min(startKHz + static_cast<double>(point) * stepKHz, stopKHz);
     double freqHz = freqKHz * 1000.0;
 

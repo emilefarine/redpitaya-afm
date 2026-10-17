@@ -91,6 +91,13 @@ public:
   }
 
   /**
+   * @brief True when the command in progress must stop: server stopping or client gone
+   *
+   * Call from the command handler only (server thread).
+   */
+  bool isCommandCancelled() const;
+
+  /**
    * @brief Send a message to the connected client
    * @param message Message to send
    * @return true if sent successfully

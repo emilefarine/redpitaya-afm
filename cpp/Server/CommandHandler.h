@@ -10,6 +10,7 @@
 #include "HardwareFactories.h"
 #include "Protocol.h"
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -73,6 +74,9 @@ public:
   /** @brief Default timeout for blocking measurement waits */
   static constexpr int DEFAULT_MEASUREMENT_TIMEOUT_MS = 5000;
 
+  /** @brief Returns true when the running command must stop */
+  using CancelCheck = std::function<bool()>;
+
   /**
    * @brief Construct a command handler
    * @param hardwareFactory Creates the Red Pitaya hardware on SYSTEM:INIT
@@ -102,6 +106,12 @@ public:
   const SystemStatus& getStatus() const
   {
     return m_status;
+  }
+
+  /** @brief Checked between sweep points */
+  void setCancelCheck(CancelCheck check)
+  {
+    m_cancelCheck = std::move(check);
   }
 
 private:
@@ -182,6 +192,7 @@ private:
   HardwareFactory m_hardwareFactory;
   BoardFactory m_boardFactory;
   int m_measurementTimeoutMs;
+  CancelCheck m_cancelCheck;
 
   std::unique_ptr<IRedPitayaHardware> m_hardware;
   std::unique_ptr<IElectronicBoard> m_board;

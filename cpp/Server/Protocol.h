@@ -106,6 +106,7 @@ enum class ResponseStatus : uint8_t
   ERR_HARDWARE, // Hardware error
   ERR_NOT_INIT, // Hardware not initialized
   ERR_TIMEOUT,  // Operation timed out
+  ERR_ABORTED,  // Cancelled: client gone or server stopping
   ERR_UNKNOWN   // Unknown error
 };
 
@@ -184,6 +185,8 @@ inline const char* statusToString(ResponseStatus status)
     return "ERR_NOT_INIT";
   case ResponseStatus::ERR_TIMEOUT:
     return "ERR_TIMEOUT";
+  case ResponseStatus::ERR_ABORTED:
+    return "ERR_ABORTED";
   default:
     return "ERR_UNKNOWN";
   }
@@ -414,7 +417,7 @@ inline std::string buildTextResponse(const std::string& text)
 struct VersionInfo
 {
   static constexpr int MAJOR = 2;
-  static constexpr int MINOR = 8;
+  static constexpr int MINOR = 9;
   static constexpr int PATCH = 0;
 
   static std::string toString()

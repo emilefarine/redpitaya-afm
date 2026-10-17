@@ -207,6 +207,7 @@ int main(int argc, char* argv[])
     // Set command callback
     server.setCommandHandler([&commandHandler](const AFM::ParsedCommand& cmd)
                              { return commandHandler->handleCommand(cmd); });
+    commandHandler->setCancelCheck([&server]() { return server.isCommandCancelled(); });
 
     std::cout << "[Main] Starting server on port " << options.port << "...\n" << std::endl;
 

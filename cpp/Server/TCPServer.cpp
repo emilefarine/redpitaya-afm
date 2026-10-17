@@ -7,6 +7,7 @@
 #include <iostream>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -280,6 +281,21 @@ void TCPServer::_configureClientSocket()
            std::string(strerror(errno)));
     }
   }
+}
+
+bool TCPServer::isCommandCancelled() const
+{
+  if (m_shouldStop.load() || m_clientFd < 0)
+  {
+    return true;
+  }
+
+  // Peek without reading: a client may already have sent its next command
+  struct pollfd pfd;
+  pfd.fd = m_clientFd;
+  pfd.events = POLLRDHUP;
+  pfd.revents = 0;
+  return poll(&pfd, 1, 0) > 0 && (pfd.revents & (POLLRDHUP | POLLHUP | POLLERR)) != 0;
 }
 
 void TCPServer::_handleClient()
