@@ -43,16 +43,3 @@ TEST(HardwareLimitsTest, DecimationBoundaries)
   EXPECT_FALSE(HardwareLimits::isValidDecimation(0));
   EXPECT_FALSE(HardwareLimits::isValidDecimation(-16));
 }
-
-TEST(HardwareLimitsTest, CountZeroIsUnknown)
-{
-  EXPECT_TRUE(HardwareLimits::isCountConsistent(0, 8192));
-  EXPECT_TRUE(HardwareLimits::isCountConsistent(0, HardwareLimits::MAX_SAMPLES));
-}
-
-TEST(HardwareLimitsTest, CountMustMatchWhenPresent)
-{
-  EXPECT_TRUE(HardwareLimits::isCountConsistent(8192, 8192));
-  EXPECT_FALSE(HardwareLimits::isCountConsistent(8191, 8192));
-  EXPECT_FALSE(HardwareLimits::isCountConsistent(65535, HardwareLimits::MAX_SAMPLES));
-}

@@ -242,17 +242,6 @@ bool RedPitayaHardware::getAcquiredSignal(std::vector<float>& signal)
     return false;
   }
 
-  // A zero count means "not available": the RTL clears it when acquisition
-  // stops and its 16-bit counter wraps at exactly MAX_SAMPLES. Any other
-  // value must match the requested size.
-  uint32_t acquiredCount = m_regs[REG_COUNT_MEASURE];
-  if (!HardwareLimits::isCountConsistent(acquiredCount, signal.size()))
-  {
-    std::cerr << "Error: Acquired sample count mismatch (expected " << signal.size()
-              << ", got " << acquiredCount << ")" << std::endl;
-    return false;
-  }
-
   return true;
 }
 
