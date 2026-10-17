@@ -2,10 +2,12 @@
 
 #include "IElectronicBoard.h"
 
-BoardProtocol::BoardProtocol(SendFn send, ReadLineFn readLine, std::string& lastError)
+BoardProtocol::BoardProtocol(SendFn send, ReadLineFn readLine, std::string& lastError,
+                             NowFn now)
     : m_send(std::move(send))
     , m_readLine(std::move(readLine))
     , m_lastError(lastError)
+    , m_now(std::move(now))
 {
 }
 
@@ -155,51 +157,77 @@ bool BoardProtocol::sendCommand(const std::string& command,
     return false;
   }
 
-  const bool isStatusCmd = (command == "STATUS");
-  std::string statusAccum;
-  bool statusHasData = false;
-
+  const auto deadline = m_now() + std::chrono::milliseconds(timeoutMs);
+  bool echoSeen = false;
+  std::string payload;
   std::string line;
-  while (m_readLine(line, timeoutMs))
+  size_t lineCount = 0;
+  m_lastError.clear();
+
+  while (lineCount < MAX_REPLY_LINES)
   {
-    if (line.find("OK") == 0)
+    const auto remaining =
+        std::chrono::duration_cast<std::chrono::milliseconds>(deadline - m_now()).count();
+    if (remaining <= 0 || !m_readLine(line, static_cast<uint32_t>(remaining)))
+    {
+      break;
+    }
+    ++lineCount;
+
+    if (!echoSeen)
+    {
+      echoSeen = _isEcho(line, command);
+      continue;
+    }
+
+    if (line == "OK")
     {
       if (response)
       {
-        *response = (isStatusCmd && statusHasData) ? statusAccum : line;
+        *response = payload.empty() ? line : payload;
       }
       return true;
     }
 
-    if (line.find("ERR:") == 0)
+    if (line.rfind("ERR:", 0) == 0)
     {
       m_lastError = line.substr(4);
       return false;
     }
 
-    if (isStatusCmd)
-    {
-      if (statusHasData)
-      {
-        statusAccum += "\n" + line;
-      }
-      else
-      {
-        statusAccum = line;
-        statusHasData = true;
-      }
-      timeoutMs = 200;
-      continue;
-    }
-
-    timeoutMs = 500;
+    payload += (payload.empty() ? "" : "\n") + line;
   }
 
-  if (m_lastError.empty())
+  std::string reason;
+  if (lineCount >= MAX_REPLY_LINES)
   {
-    m_lastError = "No response from board";
+    reason = "Board reply exceeds " + std::to_string(MAX_REPLY_LINES) + " lines";
   }
+  else if (echoSeen)
+  {
+    reason = "No OK or ERR from board after " + command;
+  }
+  else if (lineCount > 0)
+  {
+    reason = "Board did not echo " + command;
+  }
+  else
+  {
+    reason = "No response from board";
+  }
+  m_lastError = m_lastError.empty() ? reason : reason + " (" + m_lastError + ")";
   return false;
+}
+
+bool BoardProtocol::_isEcho(const std::string& line, const std::string& command)
+{
+  // The echo follows the "> " prompt left by the previous command
+  size_t begin = 0;
+  while (begin < line.size() && (line[begin] == '>' || line[begin] == ' '))
+  {
+    ++begin;
+  }
+  return line.compare(begin, std::string::npos, command) == 0;
 }
 
 const std::string& BoardProtocol::getLastError() const
