@@ -192,6 +192,20 @@ The prediction is only as good as the declared sample gain and assumes a +/-1 V 
 (`DAC_FULL_SCALE` in `cpp/Hardware/InputSafety.h`). `SAT=` reports real clipping. RP-only
 mode has no monitor.
 
+### 6. Hardware loopback check
+
+Run after flashing a bitstream or changing `cpp/Hardware/`. It needs the standard wiring
+(Red Pitaya OUT1 -> board IN1, board OUT1 -> Red Pitaya IN1), or a cable OUT1 -> IN1 in
+`--no-board` mode:
+
+```bash
+python python/afm_hil_check.py 192.168.1.100
+```
+
+The script routes board OUT1 <- IN1 at gain x1 and leaves it so. It checks the signal level
+and flatness, linear phase, every decimation, the sinc level, the full 65536-sample depth,
+amplitude linearity (no stale data) and repeatability. Exit code 0 when every check passes.
+
 ## SCPI protocol
 
 The server speaks an SCPI-inspired ASCII protocol over **TCP port 5025**. Commands are
