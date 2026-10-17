@@ -1,12 +1,9 @@
 #include "FFTProcessor.h"
+#include "MathConstants.h"
 
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
 
 FFTProcessor::FFTProcessor(double samplingFrequency)
     : m_samplingFrequency(samplingFrequency)
@@ -122,7 +119,7 @@ void FFTProcessor::applyWindow(std::vector<float>& signal, WindowType windowType
     // Hann window: w(n) = 0.5 * (1 - cos(2π*n/(N-1)))
     for (size_t i = 0; i < N; ++i)
     {
-      double window = 0.5 * (1.0 - cos(2.0 * M_PI * i / (N - 1)));
+      double window = 0.5 * (1.0 - cos(2.0 * c_Pi * i / (N - 1)));
       signal[i] *= static_cast<float>(window);
     }
     break;
@@ -131,7 +128,7 @@ void FFTProcessor::applyWindow(std::vector<float>& signal, WindowType windowType
     // Hamming window: w(n) = 0.54 - 0.46 * cos(2π*n/(N-1))
     for (size_t i = 0; i < N; ++i)
     {
-      double window = 0.54 - 0.46 * cos(2.0 * M_PI * i / (N - 1));
+      double window = 0.54 - 0.46 * cos(2.0 * c_Pi * i / (N - 1));
       signal[i] *= static_cast<float>(window);
     }
     break;
@@ -141,7 +138,7 @@ void FFTProcessor::applyWindow(std::vector<float>& signal, WindowType windowType
     for (size_t i = 0; i < N; ++i)
     {
       double window =
-          0.42 - 0.5 * cos(2.0 * M_PI * i / (N - 1)) + 0.08 * cos(4.0 * M_PI * i / (N - 1));
+          0.42 - 0.5 * cos(2.0 * c_Pi * i / (N - 1)) + 0.08 * cos(4.0 * c_Pi * i / (N - 1));
       signal[i] *= static_cast<float>(window);
     }
     break;

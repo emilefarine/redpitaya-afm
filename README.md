@@ -32,7 +32,7 @@ few milliseconds, and a **lock-in sweep** that resolves narrow resonances.
 cpp/                 Embedded C++ server + signal processing (build & run on the Red Pitaya)
   Hardware/          Hardware abstraction: FPGA register access, board UART, SSD1306 OLED
   Server/            TCP server, SCPI command handler, protocol
-  SignalProcessing/  Signal generation, FFT (FFTW3), resonance analysis
+  SignalProcessing/  Signal generation, FFT (FFTW3), ADC saturation check
   Tools/             oled-ip helper + systemd service
   tests/             Host-side unit tests (run on the dev PC, no Red Pitaya needed)
 python/              Client library, CLI, GUI (with routing schematic dialog) and deployment
@@ -74,7 +74,9 @@ pip install -r python/requirements.txt
 
 All scripts that connect to the board accept `--host <ip>` (or the `RP_HOST` environment
 variable). SSH credentials default to the Red Pitaya factory login `root` / `root` and can be
-overridden with `--user` / `--password` (or `RP_USER` / `RP_PASSWORD`).
+overridden with `--user` / `--password` (or `RP_USER` / `RP_PASSWORD`). Prefer
+`RP_PASSWORD`: a `--password` value stays in the shell history. `rp_deploy.py` accepts any SSH
+host key, which suits a Red Pitaya on a private bench network.
 
 ## Usage
 
@@ -193,8 +195,9 @@ Before each measurement the server predicts the peak at the ADC:
   "ADC Input" in the GUI.
 
 The prediction is only as good as the declared sample gain and assumes a +/-1 V output
-(`DAC_FULL_SCALE` in `cpp/Hardware/InputSafety.h`). `SAT=` reports real clipping. RP-only
-mode has no monitor.
+(`DAC_FULL_SCALE` in `cpp/Hardware/InputSafety.h`). `SAT=` reports real clipping, seen in
+the samples after the FPGA averaging: clipping of a signal above about a third of the
+decimated Nyquist frequency can go unseen. RP-only mode has no monitor.
 
 ### 6. Hardware loopback check
 
@@ -215,7 +218,7 @@ amplitude linearity (no stale data) and repeatability. Exit code 0 when every ch
 The server speaks an SCPI-inspired ASCII protocol over **TCP port 5025**. Commands are
 case-insensitive, colon-separated, `?`-suffixed for queries, with comma-separated arguments;
 every line ends with `\n`. Responses are a single line, `OK [data]` or `ERR_<CODE>: <message>`,
-except `MEASURE:*` and `BOARD:STATUS?` (below).
+except `MEASURE:*` and `BOARD:STATUS?` (below). Extra arguments are refused with `ERR_SYNTAX`.
 
 | Command | Description |
 |---------|-------------|
@@ -237,6 +240,7 @@ except `MEASURE:*` and `BOARD:STATUS?` (below).
 `freq_kHz,magnitude,phase_rad`. `<BYTES>` is the exact size of the payload that follows the
 header line, so a client can read it in one shot instead of scanning for newlines.
 
+`MEASURE:SWEEP` skips the points at or below 0 Hz when `center - range/2` is negative.
 For `MEASURE:SWEEP`, `phase_rad` is the phase of the response relative to the excitation
 (negative = lag). For `MEASURE:SINC` it is the FFT phase of the acquired record.
 

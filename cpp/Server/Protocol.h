@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../Hardware/HardwareLimits.h"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -26,10 +25,6 @@ struct ServerConfig
   static constexpr int SELECT_POLL_MS = 1000;   // Check for shutdown every 1 second
   static constexpr int SOCKET_TIMEOUT_SEC = 30;
 
-  // FPGA constraint: decimation must be power-of-two in [16, 1024]
-  static constexpr uint16_t MIN_DECIMATION = HardwareLimits::MIN_DECIMATION;
-  static constexpr uint16_t MAX_DECIMATION = HardwareLimits::MAX_DECIMATION;
-
   // ADC sample rate of the Red Pitaya STEMlab 125-14
   static constexpr double ADC_SAMPLE_RATE_HZ = 125000000.0;
 
@@ -41,9 +36,10 @@ struct ServerConfig
 /**
  * @brief SCPI command definitions.
  *
- * X(enum_name, scpi_keyword), maps an enum value to its SCPI wire-format
- * keyword.  The parser strips a trailing '?' (marking a query) before
- * matching; the isQuery flag in ParsedCommand distinguishes set from query.
+ * X(enum_name, scpi_keyword, max_args), maps an enum value to its SCPI
+ * wire-format keyword and the largest argument count it accepts. The parser
+ * strips a trailing '?' (marking a query) before matching; the isQuery flag
+ * in ParsedCommand distinguishes set from query.
  *
  * ADC input protection (see InputSafety.h):
  *   The server predicts the peak at the +/-1 V ADC input from the excitation
@@ -62,26 +58,26 @@ struct ServerConfig
  *   state counts as the worst case.
  */
 #define AFM_COMMAND_LIST \
-    X(IDN,                  "*IDN")                   /* IEEE 488.2: Identify */ \
-    X(RST,                  "*RST")                   /* IEEE 488.2: Reset */ \
-    X(OPC,                  "*OPC")                   /* IEEE 488.2: Operation complete */ \
-    X(SYST_PING,            "SYSTEM:PING")            /* Test connection */ \
-    X(SYST_VERSION,         "SYSTEM:VERSION")         /* Get server version */ \
-    X(SYST_STATUS,          "SYSTEM:STATUS")          /* Get system status */ \
-    X(SYST_INIT,            "SYSTEM:INIT")            /* Initialize all hardware */ \
-    X(SYST_DEINIT,          "SYSTEM:DEINIT")          /* Deinitialize hardware */ \
-    X(SYST_MODE,            "SYSTEM:MODE")            /* Get operating mode */ \
-    X(SYST_SHUTDOWN,        "SYSTEM:SHUTDOWN")        /* Shutdown server */ \
-    X(BOARD_MUX_ROUTE,      "BOARD:MUX:ROUTE")        /* Route input to output */ \
-    X(BOARD_MUX_DISCONNECT, "BOARD:MUX:DISCONNECT")   /* Disconnect MUX output */ \
-    X(BOARD_GAIN,           "BOARD:GAIN")             /* Set channel gain */ \
-    X(BOARD_ADC_LOOP,       "BOARD:ADC:LOOP")         /* Configure ADC return-path overdrive monitor */ \
-    X(BOARD_ADC_PROTECT,    "BOARD:ADC:PROTECT")      /* Refuse or allow ADC overdrive */ \
-    X(BOARD_ADC_SAMPLEGAIN, "BOARD:ADC:SAMPLEGAIN")   /* Expected AFM return ratio */ \
-    X(BOARD_RESET,          "BOARD:RESET")            /* Reset electronic board */ \
-    X(BOARD_STATUS,         "BOARD:STATUS")           /* Get electronic board status */ \
-    X(MEAS_SINC,            "MEASURE:SINC")           /* Broadband sinc measurement + FFT */ \
-    X(MEAS_SWEEP,           "MEASURE:SWEEP")          /* Frequency sweep measurement */
+    X(IDN,                  "*IDN",                 0) /* IEEE 488.2: Identify */ \
+    X(RST,                  "*RST",                 0) /* IEEE 488.2: Reset */ \
+    X(OPC,                  "*OPC",                 0) /* IEEE 488.2: Operation complete */ \
+    X(SYST_PING,            "SYSTEM:PING",          0) /* Test connection */ \
+    X(SYST_VERSION,         "SYSTEM:VERSION",       0) /* Get server version */ \
+    X(SYST_STATUS,          "SYSTEM:STATUS",        0) /* Get system status */ \
+    X(SYST_INIT,            "SYSTEM:INIT",          0) /* Initialize all hardware */ \
+    X(SYST_DEINIT,          "SYSTEM:DEINIT",        0) /* Deinitialize hardware */ \
+    X(SYST_MODE,            "SYSTEM:MODE",          0) /* Get operating mode */ \
+    X(SYST_SHUTDOWN,        "SYSTEM:SHUTDOWN",      0) /* Shutdown server */ \
+    X(BOARD_MUX_ROUTE,      "BOARD:MUX:ROUTE",      2) /* Route input to output */ \
+    X(BOARD_MUX_DISCONNECT, "BOARD:MUX:DISCONNECT", 1) /* Disconnect MUX output */ \
+    X(BOARD_GAIN,           "BOARD:GAIN",           2) /* Set channel gain */ \
+    X(BOARD_ADC_LOOP,       "BOARD:ADC:LOOP",       2) /* ADC overdrive monitor loop */ \
+    X(BOARD_ADC_PROTECT,    "BOARD:ADC:PROTECT",    1) /* Refuse or allow ADC overdrive */ \
+    X(BOARD_ADC_SAMPLEGAIN, "BOARD:ADC:SAMPLEGAIN", 1) /* Expected AFM return ratio */ \
+    X(BOARD_RESET,          "BOARD:RESET",          0) /* Reset electronic board */ \
+    X(BOARD_STATUS,         "BOARD:STATUS",         0) /* Get electronic board status */ \
+    X(MEAS_SINC,            "MEASURE:SINC",         5) /* Broadband sinc measurement + FFT */ \
+    X(MEAS_SWEEP,           "MEASURE:SWEEP",        5) /* Frequency sweep measurement */
 // clang-format on
 
 /**
@@ -89,7 +85,7 @@ struct ServerConfig
  */
 enum class Command : uint8_t
 {
-#define X(name, scpi) name,
+#define X(name, scpi, maxArgs) name,
   AFM_COMMAND_LIST
 #undef X
       UNKNOWN
@@ -141,7 +137,7 @@ inline Command parseCommand(const std::string& cmdStr)
   std::string upper = cmdStr;
   std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
 
-#define X(name, scpi)                                                                              \
+#define X(name, scpi, maxArgs)                                                                     \
   if (upper == scpi)                                                                               \
     return Command::name;
   AFM_COMMAND_LIST
@@ -156,13 +152,30 @@ inline const char* commandToString(Command cmd)
 {
   switch (cmd)
   {
-#define X(name, scpi)                                                                              \
+#define X(name, scpi, maxArgs)                                                                     \
   case Command::name:                                                                              \
     return scpi;
     AFM_COMMAND_LIST
 #undef X
   default:
     return "UNKNOWN";
+  }
+}
+
+/**
+ * @brief Largest number of arguments a command accepts
+ */
+inline size_t maxArgCount(Command cmd)
+{
+  switch (cmd)
+  {
+#define X(name, scpi, maxArgs)                                                                     \
+  case Command::name:                                                                              \
+    return maxArgs;
+    AFM_COMMAND_LIST
+#undef X
+  default:
+    return 0;
   }
 }
 
@@ -221,7 +234,7 @@ struct ParsedCommand
   }
 
   /**
-   * @brief Get argument as float
+   * @brief Get argument as a finite decimal float
    * Note: std::from_chars for float may not be available on all compilers,
    * so we fall back to strtof which is still faster than exceptions.
    */
@@ -232,7 +245,8 @@ struct ParsedCommand
       return false;
     }
     const std::string& s = args[index];
-    if (s.empty())
+    // strtof also reads hex floats such as 0x1p7
+    if (s.empty() || s.find_first_of("xX") != std::string::npos)
     {
       return false;
     }
@@ -260,12 +274,12 @@ struct ParsedCommand
  */
 inline std::string trim(const std::string& s)
 {
-  size_t start = s.find_first_not_of(" \t");
+  size_t start = s.find_first_not_of(" \t\r\n");
   if (start == std::string::npos)
   {
     return "";
   }
-  size_t end = s.find_last_not_of(" \t");
+  size_t end = s.find_last_not_of(" \t\r\n");
   return s.substr(start, end - start + 1);
 }
 
@@ -275,22 +289,23 @@ inline std::string trim(const std::string& s)
  * SCPI format:  KEYWORD[:SUBKEY]...[?] [arg1,arg2,...]\n
  * - Commands are case-insensitive.
  * - Trailing '?' on the keyword marks a query.
+ * - The keyword ends at the first space or tab.
  * - Arguments are comma-separated; whitespace around commas is ignored.
  */
-inline ParsedCommand parseLine(const std::string& line)
+inline ParsedCommand parseLine(const std::string& rawLine)
 {
   ParsedCommand result;
-  result.rawLine = line;
+  result.rawLine = rawLine;
+  const std::string line = trim(rawLine);
 
-  // Split into keyword and argument portion at first space
   std::string keyword;
   std::string argPortion;
 
-  size_t spacePos = line.find(' ');
+  size_t spacePos = line.find_first_of(" \t");
   if (spacePos != std::string::npos)
   {
     keyword = line.substr(0, spacePos);
-    argPortion = line.substr(spacePos + 1);
+    argPortion = trim(line.substr(spacePos + 1));
   }
   else
   {
@@ -417,7 +432,7 @@ inline std::string buildTextResponse(const std::string& text)
 struct VersionInfo
 {
   static constexpr int MAJOR = 2;
-  static constexpr int MINOR = 9;
+  static constexpr int MINOR = 10;
   static constexpr int PATCH = 0;
 
   static std::string toString()

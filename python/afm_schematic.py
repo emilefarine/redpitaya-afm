@@ -664,9 +664,7 @@ class MockAFMClient:
         return BoardStatus.from_response(self.get_board_status())
 
     def set_mux(self, output, input_ch):
-        for out, inp in self._routing.items():
-            if inp == input_ch and out != output:
-                self._routing[out] = None
+        # Like the firmware: one input may feed several outputs
         self._routing[output] = input_ch
 
     def disconnect_mux(self, output):

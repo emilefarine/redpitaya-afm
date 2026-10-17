@@ -1,6 +1,8 @@
 #include "FFTProcessor.h"
 #include "SignalGenerator.h"
 
+#include "MathConstants.h"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -11,7 +13,6 @@
 namespace
 {
 
-constexpr double c_Pi = 3.14159265358979323846;
 constexpr double c_Fs = 1000000.0; // 1 MHz test sampling frequency
 
 class SignalGeneratorTest : public ::testing::Test

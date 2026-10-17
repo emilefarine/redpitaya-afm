@@ -17,7 +17,7 @@ from PyQt6.QtGui import QFont, QColor, QPainter, QIcon
 import pyqtgraph as pg
 
 from afm_client import (
-    AFMClient, AFMError, AFMBusyError, SpectrumData, OperatingMode,
+    AFMClient, AFMError, AFMBusyError, SpectrumData, OperatingMode, GAIN_LABELS, DECIMATIONS,
 )
 from afm_schematic import RoutingSchematicDialog
 
@@ -38,8 +38,6 @@ AMBER = "#f59e0b"
 TEXT = "#e2e8f0"
 TEXT_DIM = "#94a3b8"
 BORDER = "#3f3f5a"
-
-GAIN_LABELS = ["1/8", "1/4", "1/2", "1", "2", "4", "8", "16"]
 
 # Peak detection: fraction of bins ignored at each spectrum edge. Sinc broadband
 # excitation has near-zero energy at the band edges, so the measured magnitude
@@ -572,9 +570,9 @@ class AFMMainWindow(QMainWindow):
         row += 1
         layout.addWidget(QLabel("Decimation"), row, 0)
         self.dec_combo = QComboBox()
-        for d in [16, 32, 64, 128, 256, 512, 1024]:
+        for d in DECIMATIONS:
             self.dec_combo.addItem(str(d), d)
-        self.dec_combo.setCurrentIndex(2)  # 64
+        self.dec_combo.setCurrentIndex(DECIMATIONS.index(64))
         layout.addWidget(self.dec_combo, row, 1)
 
         row += 1

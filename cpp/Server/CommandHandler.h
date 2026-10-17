@@ -4,7 +4,6 @@
 #include "../Hardware/InputSafety.h"
 #include "../Hardware/IRedPitayaHardware.h"
 #include "../SignalProcessing/FFTProcessor.h"
-#include "../SignalProcessing/ResonanceAnalyzer.h"
 #include "../SignalProcessing/SaturationDetector.h"
 #include "../SignalProcessing/SignalGenerator.h"
 #include "HardwareFactories.h"
@@ -153,7 +152,8 @@ private:
   bool _validateDecimation(int decimation, std::string& errorResponse);
   bool _validateChannel1Based(int channel, const char* name, std::string& errorResponse);
   bool _validateAmplitude(float amplitude, std::string& errorResponse);
-  bool _validateNyquist(double stopHz, uint16_t dec, std::string& errorResponse);
+  bool _validateNyquist(double topHz, uint16_t dec, const char* what,
+                        std::string& errorResponse);
 
   // Shared by the MEASURE handlers
   bool _parseMeasTailArgs(const ParsedCommand& cmd, int& decimation, float& amplitude,
@@ -198,7 +198,6 @@ private:
   std::unique_ptr<IElectronicBoard> m_board;
   std::unique_ptr<SignalGenerator> m_signalGen;
   std::unique_ptr<FFTProcessor> m_fftProcessor;
-  std::unique_ptr<ResonanceAnalyzer> m_resonanceAnalyzer;
 
   SystemStatus m_status;
 

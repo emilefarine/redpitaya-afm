@@ -95,6 +95,13 @@ class AFMTimeoutError(AFMError):
     pass
 
 
+# Label of each gain index (GainSetting value)
+GAIN_LABELS = ("1/8", "1/4", "1/2", "1", "2", "4", "8", "16")
+
+# Decimations accepted by the FPGA
+DECIMATIONS = (16, 32, 64, 128, 256, 512, 1024)
+
+
 class GainSetting(Enum):
     """Gain settings matching the server's GainSetting enum"""
     GAIN_1_8 = 0
@@ -242,8 +249,8 @@ class AFMClient:
     # Sweep reply timeout, from the server sweep: 8192 samples per point at 125 MHz / decimation
     SWEEP_SAMPLES = 8192
     ADC_SAMPLE_RATE_HZ = 125e6
-    MIN_DECIMATION = 16
-    MAX_DECIMATION = 1024
+    MIN_DECIMATION = DECIMATIONS[0]
+    MAX_DECIMATION = DECIMATIONS[-1]
     SWEEP_POINT_OVERHEAD_S = 0.1   # Signal load and lock-in per point, measured 10-90 ms in total
     SWEEP_TIMEOUT_MARGIN_S = 30.0
 

@@ -11,6 +11,7 @@
 
 #include "../Hardware/BoardProtocol.h"
 #include "../Hardware/HardwareLimits.h"
+#include "MathConstants.h"
 
 #include <algorithm>
 #include <chrono>
@@ -19,10 +20,6 @@
 #include <iostream>
 #include <sstream>
 #include <thread>
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
 
 namespace AFM
 {
@@ -70,7 +67,6 @@ CommandHandler::CommandHandler(HardwareFactory hardwareFactory,
     , m_board(nullptr)
     , m_signalGen(nullptr)
     , m_fftProcessor(nullptr)
-    , m_resonanceAnalyzer(nullptr)
     , m_lastExcitationAmplitude(1.0f)
 {
   m_status.mode = mode;
@@ -91,6 +87,20 @@ CommandHandler::~CommandHandler()
 
 std::string CommandHandler::handleCommand(const ParsedCommand& cmd)
 {
+  const size_t maxArgs = maxArgCount(cmd.command);
+  if (cmd.command != Command::UNKNOWN && cmd.args.size() > maxArgs)
+  {
+    std::string message = std::string(commandToString(cmd.command)) +
+                          (maxArgs == 0 ? " takes no arguments"
+                                        : " takes at most " + std::to_string(maxArgs) +
+                                              " arguments");
+    if (cmd.command == Command::SYST_MODE)
+    {
+      message += " (the mode is set at start-up with --no-board)";
+    }
+    return buildErrorResponse(ResponseStatus::ERR_SYNTAX, message);
+  }
+
   switch (cmd.command)
   {
   // IEEE 488.2 common commands
@@ -171,7 +181,6 @@ std::string CommandHandler::_handleRst(const ParsedCommand& cmd)
   }
   m_signalGen.reset();
   m_fftProcessor.reset();
-  m_resonanceAnalyzer.reset();
   // *RST does not reset the board, so the cache is stale until SYSTEM:INIT
   // re-reads it. Safe because the monitor is inactive until then.
   _resetBoardCache();
@@ -424,7 +433,9 @@ std::string CommandHandler::_handleBoardGain(const ParsedCommand& cmd)
 
   if (gainIndex < 0 || gainIndex > IElectronicBoard::MAX_GAIN_INDEX)
   {
-    return buildErrorResponse(ResponseStatus::ERR_PARAM, "gain_index must be 0-7");
+    return buildErrorResponse(ResponseStatus::ERR_PARAM,
+                              "gain_index must be 0-" +
+                                  std::to_string(IElectronicBoard::MAX_GAIN_INDEX));
   }
 
   // Convert to 0-indexed channel for internal use
@@ -686,7 +697,7 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_PARAM, "bandwidth must be at least 1 Hz");
   }
 
-  if (!_validateNyquist(centerHz + bandwidthHz / 2.0, dec, error))
+  if (!_validateNyquist(centerHz + bandwidthHz / 2.0, dec, "excitation band", error))
     return error;
 
   if (!_checkAdcProtection(amplitude, error))
@@ -810,12 +821,10 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
   uint16_t dec = static_cast<uint16_t>(decimation);
 
   // Compute frequency range
-  double startKHz = centerKHz - rangeKHz / 2.0;
-  double stopKHz = centerKHz + rangeKHz / 2.0;
-  if (startKHz < 0.0)
-    startKHz = 0.0;
+  const double startKHz = centerKHz - rangeKHz / 2.0;
+  const double stopKHz = centerKHz + rangeKHz / 2.0;
 
-  if (!_validateNyquist(stopKHz * 1000.0, dec, error))
+  if (!_validateNyquist(stopKHz * 1000.0, dec, "stop frequency", error))
     return error;
 
   // Relative tolerance: a float step such as 0.1 must not drop the stop frequency
@@ -838,6 +847,19 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
   }
   size_t numPoints = static_cast<size_t>(pointsEstimate);
 
+  // Keep the grid, skip the points at or below 0 Hz
+  size_t firstPoint = 0;
+  if (startKHz <= 0.0)
+  {
+    firstPoint = static_cast<size_t>(
+                     std::floor(-startKHz / stepKHz * (1.0 + c_SweepStepTolerance))) +
+                 1;
+  }
+  if (firstPoint >= numPoints)
+  {
+    return buildErrorResponse(ResponseStatus::ERR_PARAM, "sweep has no point above 0 Hz");
+  }
+
   if (!_checkAdcProtection(amplitude, error))
     return error;
 
@@ -854,14 +876,15 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
   ScopedMeasurement measurement(m_status, *m_hardware);
 
   std::vector<SpectrumPoint> spectrum;
-  spectrum.reserve(numPoints);
+  spectrum.reserve(numPoints - firstPoint);
 
-  for (size_t point = 0; point < numPoints; ++point)
+  for (size_t point = firstPoint; point < numPoints; ++point)
   {
     if (m_cancelCheck && m_cancelCheck())
     {
-      return buildErrorResponse(ResponseStatus::ERR_ABORTED,
-                                "Sweep cancelled after " + std::to_string(point) + " points");
+      return buildErrorResponse(ResponseStatus::ERR_ABORTED, "Sweep cancelled after " +
+                                                                 std::to_string(spectrum.size()) +
+                                                                 " points");
     }
 
     double freqKHz = std::min(startKHz + static_cast<double>(point) * stepKHz, stopKHz);
@@ -903,7 +926,7 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
         std::max(m_status.adcSaturationRatio, saturation.saturatedRatio);
 
     // Compute amplitude and phase via sin/cos correlation
-    double omega = 2.0 * M_PI * freqHz / samplingFreq;
+    double omega = 2.0 * c_Pi * freqHz / samplingFreq;
     double sumSin = 0.0;
     double sumCos = 0.0;
 
@@ -997,9 +1020,14 @@ bool CommandHandler::_validateDecimation(int decimation, std::string& errorRespo
 {
   if (!HardwareLimits::isValidDecimation(decimation))
   {
-    errorResponse =
-        buildErrorResponse(ResponseStatus::ERR_PARAM,
-                           "decimation must be a power of 2 (16, 32, 64, 128, 256, 512, 1024)");
+    std::string values;
+    for (int dec = HardwareLimits::MIN_DECIMATION; dec <= HardwareLimits::MAX_DECIMATION;
+         dec *= 2)
+    {
+      values += (values.empty() ? "" : ", ") + std::to_string(dec);
+    }
+    errorResponse = buildErrorResponse(ResponseStatus::ERR_PARAM,
+                                       "decimation must be a power of 2 (" + values + ")");
     return false;
   }
   return true;
@@ -1015,13 +1043,14 @@ bool CommandHandler::_validateAmplitude(float amplitude, std::string& errorRespo
   return true;
 }
 
-bool CommandHandler::_validateNyquist(double stopHz, uint16_t dec, std::string& errorResponse)
+bool CommandHandler::_validateNyquist(double topHz, uint16_t dec, const char* what,
+                                      std::string& errorResponse)
 {
   double nyquistHz = ServerConfig::ADC_SAMPLE_RATE_HZ / (2.0 * dec);
-  if (stopHz >= nyquistHz)
+  if (topHz >= nyquistHz)
   {
     std::ostringstream oss;
-    oss << std::fixed << std::setprecision(3) << "stop frequency exceeds Nyquist ("
+    oss << std::fixed << std::setprecision(3) << what << " exceeds Nyquist ("
         << nyquistHz / 1000.0 << " kHz) at decimation " << dec;
     errorResponse = buildErrorResponse(ResponseStatus::ERR_PARAM, oss.str());
     return false;
@@ -1070,7 +1099,6 @@ double CommandHandler::_applyDecimation(uint16_t dec, std::string& errorResponse
   double samplingFreq = ServerConfig::ADC_SAMPLE_RATE_HZ / dec;
   m_signalGen = std::make_unique<SignalGenerator>(samplingFreq, dec);
   m_fftProcessor = std::make_unique<FFTProcessor>(samplingFreq);
-  m_resonanceAnalyzer = std::make_unique<ResonanceAnalyzer>(samplingFreq);
   return samplingFreq;
 }
 
