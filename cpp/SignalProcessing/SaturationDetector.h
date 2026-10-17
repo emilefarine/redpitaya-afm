@@ -11,6 +11,10 @@
  * detected statistically: samples pinned at the input full scale indicate a
  * clipped acquisition. This catches real overrange even when the predicted
  * worst case (InputSafety) was optimistic.
+ *
+ * Limit: the samples come after the FPGA averager, so clipping of a signal above
+ * about a third of the decimated Nyquist frequency is averaged away. A latched
+ * overrange flag in the FPGA (STATUS bit 2 is free) would fix that.
  */
 namespace SaturationDetector
 {

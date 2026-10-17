@@ -195,8 +195,9 @@ Before each measurement the server predicts the peak at the ADC:
   "ADC Input" in the GUI.
 
 The prediction is only as good as the declared sample gain and assumes a +/-1 V output
-(`DAC_FULL_SCALE` in `cpp/Hardware/InputSafety.h`). `SAT=` reports real clipping. RP-only
-mode has no monitor.
+(`DAC_FULL_SCALE` in `cpp/Hardware/InputSafety.h`). `SAT=` reports real clipping, seen in
+the samples after the FPGA averaging: clipping of a signal above about a third of the
+decimated Nyquist frequency can go unseen. RP-only mode has no monitor.
 
 ### 6. Hardware loopback check
 
@@ -239,10 +240,10 @@ except `MEASURE:*` and `BOARD:STATUS?` (below). Extra arguments are refused with
 `freq_kHz,magnitude,phase_rad`. `<BYTES>` is the exact size of the payload that follows the
 header line, so a client can read it in one shot instead of scanning for newlines.
 
+`MEASURE:SWEEP` skips the points at or below 0 Hz when `center - range/2` is negative.
 For `MEASURE:SWEEP`, `phase_rad` is the phase of the response relative to the excitation
 (negative = lag). For `MEASURE:SINC` it is the FFT phase of the acquired record.
 
-`MEASURE:SWEEP` skips the points at or below 0 Hz when `center - range/2` is negative.
 `BOARD:STATUS?` returns `OK LINES <N>` followed by the `N` lines of the board status block.
 
 A measurement that does not complete returns `ERR_TIMEOUT`. A `MEASURE:SWEEP` stops between
