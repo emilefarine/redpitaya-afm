@@ -625,7 +625,7 @@ std::string CommandHandler::_handleBoardStatus(const ParsedCommand& cmd)
   // Resync the cache with the real board state
   _refreshBoardCacheFromStatus(boardStatus);
 
-  return buildOkResponse(boardStatus);
+  return buildTextResponse(boardStatus);
 }
 
 // ---- MEASURE subsystem ----

@@ -386,12 +386,38 @@ inline std::string buildSpectrumResponse(const std::vector<SpectrumPoint>& spect
 }
 
 /**
+ * @brief Build a multi-line text response: "OK LINES <N>" then N lines
+ *
+ * Carriage returns are dropped so every line ends with a single '\n'.
+ */
+inline std::string buildTextResponse(const std::string& text)
+{
+  std::string body;
+  size_t count = 0;
+  size_t pos = 0;
+  while (pos <= text.size())
+  {
+    size_t end = text.find('\n', pos);
+    if (end == std::string::npos)
+    {
+      end = text.size();
+    }
+    std::string line = text.substr(pos, end - pos);
+    line.erase(std::remove(line.begin(), line.end(), '\r'), line.end());
+    body += line + "\n";
+    ++count;
+    pos = end + 1;
+  }
+  return "OK LINES " + std::to_string(count) + "\n" + body;
+}
+
+/**
  * @brief Server version information
  */
 struct VersionInfo
 {
   static constexpr int MAJOR = 2;
-  static constexpr int MINOR = 7;
+  static constexpr int MINOR = 8;
   static constexpr int PATCH = 0;
 
   static std::string toString()

@@ -333,7 +333,18 @@ TEST(ProtocolTest, ServerConfigConstants)
 
 TEST(ProtocolTest, VersionInfoToString)
 {
-  EXPECT_EQ(VersionInfo::toString(), "2.7.0");
+  EXPECT_EQ(VersionInfo::toString(), "2.8.0");
+}
+
+TEST(ProtocolTest, BuildTextResponseCountsLines)
+{
+  EXPECT_EQ(buildTextResponse("=== MUX Status ===\r\nRouting:\n  OUT1 <- IN1"),
+            "OK LINES 3\n=== MUX Status ===\nRouting:\n  OUT1 <- IN1\n");
+}
+
+TEST(ProtocolTest, BuildTextResponseKeepsLinesStartingWithErr)
+{
+  EXPECT_EQ(buildTextResponse("ERR in a status line"), "OK LINES 1\nERR in a status line\n");
 }
 
 TEST(ProtocolTest, ParsesAdcProtectCommand)
