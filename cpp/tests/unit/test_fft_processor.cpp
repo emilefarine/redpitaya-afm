@@ -1,5 +1,7 @@
 #include "FFTProcessor.h"
 
+#include "MathConstants.h"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -10,7 +12,6 @@
 namespace
 {
 
-constexpr double c_Pi = 3.14159265358979323846;
 constexpr double c_Fs = 1000000.0; // 1 MHz test sampling frequency
 
 std::vector<float> makeSine(uint32_t n, double cycles, float amp = 1.0f)

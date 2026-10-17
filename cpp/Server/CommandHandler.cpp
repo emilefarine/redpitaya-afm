@@ -11,6 +11,7 @@
 
 #include "../Hardware/BoardProtocol.h"
 #include "../Hardware/HardwareLimits.h"
+#include "MathConstants.h"
 
 #include <algorithm>
 #include <chrono>
@@ -19,10 +20,6 @@
 #include <iostream>
 #include <sstream>
 #include <thread>
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
 
 namespace AFM
 {
@@ -901,7 +898,7 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
         std::max(m_status.adcSaturationRatio, saturation.saturatedRatio);
 
     // Compute amplitude and phase via sin/cos correlation
-    double omega = 2.0 * M_PI * freqHz / samplingFreq;
+    double omega = 2.0 * c_Pi * freqHz / samplingFreq;
     double sumSin = 0.0;
     double sumCos = 0.0;
 

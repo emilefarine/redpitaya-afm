@@ -1,4 +1,5 @@
 #include "CommandHandler.h"
+#include "MathConstants.h"
 #include "Protocol.h"
 
 #include "mocks/MockElectronicBoard.h"
@@ -23,10 +24,6 @@ using ::testing::Throw;
 using ::testing::ReturnRef;
 using ::testing::SizeIs;
 using ::testing::WithArg;
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
 
 namespace
 {
@@ -127,7 +124,7 @@ protected:
           s.resize(numSamples);
           for (uint32_t i = 0; i < numSamples; ++i)
             s[i] =
-                static_cast<float>(0.5 * sin(2.0 * M_PI * 50.0 * static_cast<double>(i) /
+                static_cast<float>(0.5 * sin(2.0 * c_Pi * 50.0 * static_cast<double>(i) /
                                              numSamples));
           return true;
         })));
@@ -168,7 +165,7 @@ protected:
           for (size_t i = 0; i < s.size(); ++i)
           {
             s[i] = static_cast<float>(
-                amplitude * sin(2.0 * M_PI * freqHz * static_cast<double>(i) / samplingFreq +
+                amplitude * sin(2.0 * c_Pi * freqHz * static_cast<double>(i) / samplingFreq +
                                 phaseRad));
           }
           return true;
@@ -813,19 +810,19 @@ TEST_F(CommandHandlerTest, SweepReportsMagnitudeAndPhaseOfResponse)
   primeSuccessfulMeasurement(8192);
 
   // One point at 199.75 kHz; the response lags the excitation by 30 degrees
-  respondWithSine(199750.0, 0.5, -M_PI / 6.0);
+  respondWithSine(199750.0, 0.5, -c_Pi / 6.0);
   auto rows = parseSpectrum(send("MEASURE:SWEEP 200,0.5,1"));
   ASSERT_EQ(rows.size(), 1u);
   EXPECT_NEAR(rows[0].freqKHz, 199.75, 1e-3);
   EXPECT_NEAR(rows[0].magnitude, 0.5, 5e-3);
-  EXPECT_NEAR(rows[0].phaseRad, -M_PI / 6.0, 1e-2);
+  EXPECT_NEAR(rows[0].phaseRad, -c_Pi / 6.0, 1e-2);
 
   // A lead is reported positive
-  respondWithSine(199750.0, 0.25, M_PI / 3.0);
+  respondWithSine(199750.0, 0.25, c_Pi / 3.0);
   rows = parseSpectrum(send("MEASURE:SWEEP 200,0.5,1"));
   ASSERT_EQ(rows.size(), 1u);
   EXPECT_NEAR(rows[0].magnitude, 0.25, 5e-3);
-  EXPECT_NEAR(rows[0].phaseRad, M_PI / 3.0, 1e-2);
+  EXPECT_NEAR(rows[0].phaseRad, c_Pi / 3.0, 1e-2);
 }
 
 TEST_F(CommandHandlerTest, SweepLoopbackGivesZeroPhaseAndExcitationAmplitude)
