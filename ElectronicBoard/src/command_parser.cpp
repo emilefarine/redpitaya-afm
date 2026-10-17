@@ -78,7 +78,7 @@ static bool HandleMuxCommand(const char *args) {
     SendOK();
     return true;
   } else {
-    SendError("Input already in use");
+    SendError("Invalid route");
     return false;
   }
 }
@@ -237,6 +237,6 @@ void CMD_PrintHelp(void) {
   UART_SendString("RESET          - Reset all settings\r\n");
   UART_SendString("HELP           - Show this help\r\n");
   UART_SendString("\r\n");
-  UART_SendString("Note: Each input can only be routed to ONE output.\r\n");
+  UART_SendString("Note: One input can feed several outputs.\r\n");
   UART_SendString("=================================\r\n");
 }
