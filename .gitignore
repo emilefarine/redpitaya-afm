@@ -8,6 +8,7 @@ env/
 
 # C++ build artifacts
 *.o
+*.project
 cpp/out/
 
 # KiCad regenerated / per-user / backup files
