@@ -66,6 +66,12 @@ jobs:
           cd cpp
           make check_posix
 
+      - name: Build server and tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cd cpp
+          make all
+
       - name: Run host unit tests (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
