@@ -32,7 +32,7 @@ few milliseconds, and a **lock-in sweep** that resolves narrow resonances.
 cpp/                 Embedded C++ server + signal processing (build & run on the Red Pitaya)
   Hardware/          Hardware abstraction: FPGA register access, board UART, SSD1306 OLED
   Server/            TCP server, SCPI command handler, protocol
-  SignalProcessing/  Signal generation, FFT (FFTW3), resonance analysis
+  SignalProcessing/  Signal generation, FFT (FFTW3), ADC saturation check
   Tools/             oled-ip helper + systemd service
   tests/             Host-side unit tests (run on the dev PC, no Red Pitaya needed)
 python/              Client library, CLI, GUI (with routing schematic dialog) and deployment

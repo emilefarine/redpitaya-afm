@@ -70,7 +70,6 @@ CommandHandler::CommandHandler(HardwareFactory hardwareFactory,
     , m_board(nullptr)
     , m_signalGen(nullptr)
     , m_fftProcessor(nullptr)
-    , m_resonanceAnalyzer(nullptr)
     , m_lastExcitationAmplitude(1.0f)
 {
   m_status.mode = mode;
@@ -171,7 +170,6 @@ std::string CommandHandler::_handleRst(const ParsedCommand& cmd)
   }
   m_signalGen.reset();
   m_fftProcessor.reset();
-  m_resonanceAnalyzer.reset();
   // *RST does not reset the board, so the cache is stale until SYSTEM:INIT
   // re-reads it. Safe because the monitor is inactive until then.
   _resetBoardCache();
@@ -1070,7 +1068,6 @@ double CommandHandler::_applyDecimation(uint16_t dec, std::string& errorResponse
   double samplingFreq = ServerConfig::ADC_SAMPLE_RATE_HZ / dec;
   m_signalGen = std::make_unique<SignalGenerator>(samplingFreq, dec);
   m_fftProcessor = std::make_unique<FFTProcessor>(samplingFreq);
-  m_resonanceAnalyzer = std::make_unique<ResonanceAnalyzer>(samplingFreq);
   return samplingFreq;
 }
 

@@ -4,7 +4,6 @@
 #include "../Hardware/InputSafety.h"
 #include "../Hardware/IRedPitayaHardware.h"
 #include "../SignalProcessing/FFTProcessor.h"
-#include "../SignalProcessing/ResonanceAnalyzer.h"
 #include "../SignalProcessing/SaturationDetector.h"
 #include "../SignalProcessing/SignalGenerator.h"
 #include "HardwareFactories.h"
@@ -198,7 +197,6 @@ private:
   std::unique_ptr<IElectronicBoard> m_board;
   std::unique_ptr<SignalGenerator> m_signalGen;
   std::unique_ptr<FFTProcessor> m_fftProcessor;
-  std::unique_ptr<ResonanceAnalyzer> m_resonanceAnalyzer;
 
   SystemStatus m_status;
 

@@ -60,7 +60,6 @@ HOST_UNITTEST   = $(HOST_BUILD_DIR)/unit_tests.exe
 # excluded: RedPitayaHardware, ElectronicBoardUART, TCPServer, HardwareFactories)
 HOST_SRCS  = $(SIGNAL_DIR)/SignalGenerator.cpp \
              $(SIGNAL_DIR)/FFTProcessor.cpp \
-             $(SIGNAL_DIR)/ResonanceAnalyzer.cpp \
              $(HARDWARE_DIR)/BoardProtocol.cpp \
              $(SERVER_DIR)/CommandHandler.cpp \
              $(SERVER_DIR)/ServerOptions.cpp
@@ -88,7 +87,7 @@ HOST_CXXFLAGS = -std=c++17 -Wall -Wextra -g -O0 --coverage \
 HOST_LDLIBS   = -lgtest_main -lgmock -lgtest -lfftw3f -lpthread
 
 # Signal processing library objects (in SignalProcessing folder)
-SIGNAL_PROCESSING_OBJS = $(SIGNAL_DIR)/SignalGenerator.o $(SIGNAL_DIR)/FFTProcessor.o $(SIGNAL_DIR)/ResonanceAnalyzer.o
+SIGNAL_PROCESSING_OBJS = $(SIGNAL_DIR)/SignalGenerator.o $(SIGNAL_DIR)/FFTProcessor.o
 
 # Hardware abstraction layer objects (in Hardware folder)
 HARDWARE_OBJS = $(HARDWARE_DIR)/RedPitayaHardware.o $(HARDWARE_DIR)/ElectronicBoardUART.o \
@@ -268,7 +267,6 @@ help:
 	@echo "Signal processing pipeline:"
 	@echo "  • Signal generation (sinc, sine waves)"
 	@echo "  • FFT analysis with FFTW3"
-	@echo "  • Resonance detection (frequency, Q-factor, amplitude)"
 	@echo "  • CSV export for visualization"
 
 .PHONY: all server tools test_host test_host_san check_posix coverage clean_host clean_host_san clean clean_all help
