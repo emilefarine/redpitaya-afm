@@ -553,23 +553,27 @@ class AFMClient:
         return data
 
     def _read_board_status_response(self, timeout: Optional[float] = None) -> str:
-        """Read the multi-line BOARD:STATUS? response.
-
-        The electronic board replies with a human-readable block that ends
-        with a separator line. The first payload line is the board's echoed
-        STATUS command, which is skipped here.
-        """
+        """Read the BOARD:STATUS? reply: "OK LINES <N>" then N lines."""
         header = self._read_line(timeout_override=timeout)
 
         if header.startswith("ERR"):
             raise AFMCommandError(header)
+        match = re.fullmatch(r"OK LINES (\d+)", header)
+        if match:
+            count = int(match.group(1))
+            if count > self.MAX_BOARD_STATUS_LINES:
+                raise AFMProtocolError(f"Board status too long: {count} lines")
+            return "\n".join(self._read_line(timeout_override=timeout) for _ in range(count))
         if header != "OK" and not header.startswith("OK "):
             raise AFMProtocolError(f"Unexpected board status header: {header}")
+        return self._read_legacy_board_status(header, timeout)
 
+    def _read_legacy_board_status(self, header: str, timeout: Optional[float]) -> str:
+        """Servers before 2.8.0: unframed block ending with the firmware separator line."""
         lines: list[str] = []
 
         _, _, first_line = header.partition(" ")
-        if first_line and first_line != "STATUS":
+        if first_line and first_line.lstrip("> ") != "STATUS":
             lines.append(first_line)
 
         while True:

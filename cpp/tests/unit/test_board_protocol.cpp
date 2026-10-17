@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -10,13 +11,18 @@
 namespace
 {
 
+// Scripted board with a fake clock: each line read takes lineDelayMs
 class FakeBoard
 {
 public:
   std::vector<std::string> lines;
   std::vector<uint32_t> timeouts;
   std::string sent;
+  std::string readError;
   bool sendOk = true;
+  bool endless = false;
+  int lineDelayMs = 0;
+  std::chrono::steady_clock::time_point now{};
 
   bool send(const std::string& data)
   {
@@ -28,14 +34,17 @@ public:
     return true;
   }
 
-  bool readLine(std::string& line, uint32_t timeoutMs)
+  bool readLine(std::string& line, uint32_t timeoutMs, std::string& error)
   {
     timeouts.push_back(timeoutMs);
-    if (m_nextLine >= lines.size())
+    if (lineDelayMs > static_cast<int>(timeoutMs) || (!endless && m_nextLine >= lines.size()))
     {
+      now += std::chrono::milliseconds(timeoutMs);
+      error = readError;
       return false;
     }
-    line = lines[m_nextLine++];
+    now += std::chrono::milliseconds(lineDelayMs);
+    line = endless ? "spam" : lines[m_nextLine++];
     return true;
   }
 
@@ -50,8 +59,9 @@ protected:
   {
     m_protocol = std::make_unique<BoardProtocol>(
         [this](const std::string& data) { return m_board.send(data); },
-        [this](std::string& line, uint32_t timeoutMs) { return m_board.readLine(line, timeoutMs); },
-        m_error);
+        [this](std::string& line, uint32_t timeoutMs)
+        { return m_board.readLine(line, timeoutMs, m_error); },
+        m_error, [this] { return m_board.now; });
   }
 
   FakeBoard m_board;
@@ -61,7 +71,7 @@ protected:
 
 TEST_F(BoardProtocolTest, SendsCommandWithNewlineTerminator)
 {
-  m_board.lines = {"OK"};
+  m_board.lines = {"GAIN1,3", "OK"};
 
   std::string response;
   EXPECT_TRUE(m_protocol->sendCommand("GAIN1,3", &response));
@@ -69,59 +79,84 @@ TEST_F(BoardProtocolTest, SendsCommandWithNewlineTerminator)
   EXPECT_EQ(response, "OK");
 }
 
-TEST_F(BoardProtocolTest, SkipsEchoBeforeOk)
+TEST_F(BoardProtocolTest, AcceptsEchoAfterPrompt)
 {
-  m_board.lines = {"GAIN1,3", "OK"};
+  m_board.lines = {"> GAIN1,3", "OK"};
 
-  std::string response;
-  EXPECT_TRUE(m_protocol->sendCommand("GAIN1,3", &response));
-  EXPECT_EQ(response, "OK");
+  EXPECT_TRUE(m_protocol->sendCommand("GAIN1,3"));
 }
 
 TEST_F(BoardProtocolTest, ErrorResponseSetsLastError)
 {
-  m_board.lines = {"ERR:bad channel"};
+  m_board.lines = {"> GAIN1,9", "ERR:Gain must be 0-7"};
 
   EXPECT_FALSE(m_protocol->sendCommand("GAIN1,9"));
-  EXPECT_EQ(m_protocol->getLastError(), "bad channel");
+  EXPECT_EQ(m_protocol->getLastError(), "Gain must be 0-7");
 }
 
-TEST_F(BoardProtocolTest, StatusCollectsDataLinesUntilOk)
+TEST_F(BoardProtocolTest, StatusReturnsTheBlockWithoutEcho)
 {
-  m_board.lines = {"OUT1->IN1", "GAIN x2", "OK"};
+  m_board.lines = {"> STATUS",     "=== MUX Status ===", "Routing:", "  OUT1 <- IN1",
+                   "Gains:",       "  IN1: x2",          "==================", "OK"};
 
   std::string response;
   EXPECT_TRUE(m_protocol->sendCommand("STATUS", &response));
-  EXPECT_EQ(response, "OUT1->IN1\nGAIN x2");
+  EXPECT_EQ(response, "=== MUX Status ===\nRouting:\n  OUT1 <- IN1\nGains:\n  IN1: x2\n"
+                      "==================");
 }
 
 TEST_F(BoardProtocolTest, StatusWithNoDataReturnsOkLine)
 {
-  m_board.lines = {"OK"};
+  m_board.lines = {"STATUS", "OK"};
 
   std::string response;
   EXPECT_TRUE(m_protocol->sendCommand("STATUS", &response));
   EXPECT_EQ(response, "OK");
 }
 
-TEST_F(BoardProtocolTest, ShortensTimeoutAfterEcho)
+TEST_F(BoardProtocolTest, LateReplyOfEarlierCommandIsSkipped)
 {
-  m_board.lines = {"echo", "OK"};
+  // The OK of a timed-out command arrives before the echo of the next one
+  m_board.lines = {"> GAIN1,3", "OK", "> GAIN2,9", "ERR:Gain must be 0-7"};
 
-  EXPECT_TRUE(m_protocol->sendCommand("GAIN1,3", nullptr, 1000));
-  ASSERT_EQ(m_board.timeouts.size(), 2u);
-  EXPECT_EQ(m_board.timeouts[0], 1000u);
-  EXPECT_EQ(m_board.timeouts[1], 500u);
+  EXPECT_FALSE(m_protocol->sendCommand("GAIN2,9"));
+  EXPECT_EQ(m_protocol->getLastError(), "Gain must be 0-7");
 }
 
-TEST_F(BoardProtocolTest, ShortensTimeoutForStatusContinuation)
+TEST_F(BoardProtocolTest, ReplyWithoutEchoIsRejected)
 {
-  m_board.lines = {"data", "OK"};
+  m_board.lines = {"OK"};
 
-  EXPECT_TRUE(m_protocol->sendCommand("STATUS", nullptr, 1000));
-  ASSERT_EQ(m_board.timeouts.size(), 2u);
-  EXPECT_EQ(m_board.timeouts[0], 1000u);
-  EXPECT_EQ(m_board.timeouts[1], 200u);
+  EXPECT_FALSE(m_protocol->sendCommand("GAIN1,3"));
+  EXPECT_EQ(m_protocol->getLastError(), "Board did not echo GAIN1,3");
+}
+
+TEST_F(BoardProtocolTest, EchoOfAnotherCommandIsRejected)
+{
+  // Leftover characters in the board buffer merge with the command
+  m_board.lines = {"> xGAIN1,3", "ERR:Unknown command. Type HELP for help."};
+
+  EXPECT_FALSE(m_protocol->sendCommand("GAIN1,3"));
+  EXPECT_EQ(m_protocol->getLastError(), "Board did not echo GAIN1,3");
+}
+
+TEST_F(BoardProtocolTest, DeadlineCoversTheWholeReply)
+{
+  m_board.lineDelayMs = 300;
+  m_board.lines = {"> STATUS", "a", "b", "c", "d", "OK"};
+
+  EXPECT_FALSE(m_protocol->sendCommand("STATUS", nullptr, 1000));
+  EXPECT_EQ(m_board.timeouts, (std::vector<uint32_t>{1000, 700, 400, 100}));
+  EXPECT_EQ(m_protocol->getLastError(), "No OK or ERR from board after STATUS");
+}
+
+TEST_F(BoardProtocolTest, EndlessOutputIsCapped)
+{
+  m_board.endless = true;
+
+  EXPECT_FALSE(m_protocol->sendCommand("STATUS"));
+  EXPECT_EQ(m_board.timeouts.size(), BoardProtocol::MAX_REPLY_LINES);
+  EXPECT_EQ(m_protocol->getLastError(), "Board reply exceeds 64 lines");
 }
 
 TEST_F(BoardProtocolTest, SendFailureReturnsFalseAndKeepsError)
@@ -137,6 +172,23 @@ TEST_F(BoardProtocolTest, NoResponseSetsGenericError)
 {
   EXPECT_FALSE(m_protocol->sendCommand("RESET"));
   EXPECT_EQ(m_protocol->getLastError(), "No response from board");
+}
+
+TEST_F(BoardProtocolTest, ReadErrorIsKeptInTheMessage)
+{
+  m_board.readError = "Read timeout";
+
+  EXPECT_FALSE(m_protocol->sendCommand("RESET"));
+  EXPECT_EQ(m_protocol->getLastError(), "No response from board (Read timeout)");
+}
+
+TEST_F(BoardProtocolTest, StaleErrorIsNotReported)
+{
+  m_error = "Gain must be 0-7";
+  m_board.lines = {"> RESET", "Reset complete"};
+
+  EXPECT_FALSE(m_protocol->sendCommand("RESET"));
+  EXPECT_EQ(m_protocol->getLastError(), "No OK or ERR from board after RESET");
 }
 
 TEST(BoardGainStatusParseTest, ParsesRoutingAndGainSection)

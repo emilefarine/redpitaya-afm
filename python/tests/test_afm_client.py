@@ -359,29 +359,47 @@ class SpectrumTests(ClientTestCase):
 
 
 class BoardStatusTests(ClientTestCase):
-    BLOCK = (
-        "OK STATUS\n"
-        "=== MUX Status ===\n"
-        "Routing:\n"
-        "  OUT1 <- IN1\n"
-        "  OUT2 <- X (disconnected)\n"
-        "Gains:\n"
-        "  IN1: x1\n"
-        "  IN2: x4\n"
-        "==================\n"
-    )
+    STATUS_LINES = [
+        "=== MUX Status ===",
+        "Routing:",
+        "  OUT1 <- IN1",
+        "  OUT2 <- X (disconnected)",
+        "Gains:",
+        "  IN1: x1",
+        "  IN2: x4",
+        "==================",
+    ]
+
+    def get_status(self, response):
+        server = self.make_server(lambda command, handler: response)
+        client = self.make_client(server)
+        return client, client.get_board_status()
 
     def test_board_status_block(self):
-        server = self.make_server(lambda command, handler: self.BLOCK)
-        client = self.make_client(server)
-        text = client.get_board_status()
-        self.assertIn("=== MUX Status ===", text)
-        self.assertNotIn("STATUS\n", text)
+        block = f"OK LINES {len(self.STATUS_LINES)}\n" + "\n".join(self.STATUS_LINES) + "\n"
+        client, text = self.get_status(block)
+        self.assertEqual(text, "\n".join(self.STATUS_LINES))
         state = client.get_board_state()
         self.assertEqual(state.routing[1], 1)
         self.assertIsNone(state.routing[2])
         self.assertEqual(state.gains[1], "1")
         self.assertEqual(state.gains[2], "4")
+
+    def test_framed_block_needs_no_firmware_footer(self):
+        _, text = self.get_status("OK LINES 2\nRouting:\nERR in a status line\n")
+        self.assertEqual(text, "Routing:\nERR in a status line")
+
+    def test_framed_block_line_count_is_capped(self):
+        server = self.make_server(lambda command, handler: "OK LINES 100000\n")
+        client = self.make_client(server)
+        with self.assertRaises(AFMProtocolError):
+            client.get_board_status()
+
+    def test_legacy_block_skips_the_echo(self):
+        for echo in ("STATUS", "> STATUS"):
+            with self.subTest(echo=echo):
+                _, text = self.get_status(f"OK {echo}\n" + "\n".join(self.STATUS_LINES) + "\n")
+                self.assertEqual(text, "\n".join(self.STATUS_LINES))
 
     def test_standalone_parser(self):
         state = BoardStatus.from_response(

@@ -64,9 +64,9 @@ bool ElectronicBoardUART::initialize()
   tcflush(m_fd, TCIOFLUSH);
   m_lineBuffer.clear();
 
-  // Probe the board: send a command and check for a response.
+  // Probe the board: a full STATUS reply takes about 250 ms at 9600 baud
   std::string probeResponse;
-  if (!_sendCommand("STATUS", &probeResponse, 500))
+  if (!_sendCommand("STATUS", &probeResponse, 1000))
   {
     std::cout << "Electronic Board not responding on " << m_devicePath << std::endl;
     ::close(m_fd);
@@ -262,9 +262,9 @@ bool ElectronicBoardUART::_sendCommand(const std::string& command,
     return false;
   }
 
-  // NOTE: We intentionally do NOT call tcflush() here.
-  // The persistent line buffer may contain valid data from a previous read
-  // that would be lost if we flushed the OS buffer.
+  // Lines left from an earlier command never answer this one
+  tcflush(m_fd, TCIFLUSH);
+  m_lineBuffer.clear();
   return m_protocol.sendCommand(command, response, timeoutMs);
 }
 

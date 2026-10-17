@@ -1007,11 +1007,11 @@ TEST_F(CommandHandlerTest, BoardResetAndStatusForwardToBoard)
 
   EXPECT_CALL(*m_rawBoard, getStatus(_))
       .WillOnce(Invoke([](std::string& out) {
-        out = "OUT1->IN1 GAIN x2";
+        out = "=== MUX Status ===\nRouting:\n  OUT1 <- IN1";
         return true;
       }));
-  std::string resp = send("BOARD:STATUS?");
-  EXPECT_NE(resp.find("OUT1->IN1 GAIN x2"), std::string::npos);
+  EXPECT_EQ(send("BOARD:STATUS?"),
+            "OK LINES 3\n=== MUX Status ===\nRouting:\n  OUT1 <- IN1\n");
 }
 
 TEST_F(CommandHandlerTest, BoardMuxDisconnectRejectsOutOfRangeChannel)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -11,8 +12,9 @@
  *
  * Portable protocol logic extracted from ElectronicBoardUART:
  * - commands are newline-terminated ASCII, written through an injected callback
- * - the board may echo the command before replying with OK or ERR:<message>
- * - STATUS replies may span several data lines before the final OK
+ * - the board echoes each command after its "> " prompt, then prints data lines
+ *   (STATUS) and OK or ERR:<message>
+ * - lines before the echo are left over from earlier commands and are skipped
  *
  * The error string is owned by the caller so both the callbacks and the
  * protocol can report into the same storage.
@@ -22,9 +24,18 @@ class BoardProtocol
 public:
   using SendFn = std::function<bool(const std::string&)>;
   using ReadLineFn = std::function<bool(std::string&, uint32_t)>;
+  using NowFn = std::function<std::chrono::steady_clock::time_point()>;
 
-  BoardProtocol(SendFn send, ReadLineFn readLine, std::string& lastError);
+  /** Lines accepted in one reply, skipped ones included (STATUS is about 15) */
+  static constexpr size_t MAX_REPLY_LINES = 64;
 
+  BoardProtocol(SendFn send, ReadLineFn readLine, std::string& lastError,
+                NowFn now = std::chrono::steady_clock::now);
+
+  /**
+   * @brief Send a command and wait for its OK or ERR within timeoutMs in total
+   * @param response Receives the data lines between the echo and OK, or "OK"
+   */
   bool sendCommand(const std::string& command,
                    std::string* response = nullptr,
                    uint32_t timeoutMs = 1000);
@@ -65,7 +76,10 @@ public:
   const std::string& getLastError() const;
 
 private:
+  static bool _isEcho(const std::string& line, const std::string& command);
+
   SendFn m_send;
   ReadLineFn m_readLine;
   std::string& m_lastError;
+  NowFn m_now;
 };
