@@ -109,6 +109,11 @@ private:
   void _acceptClient();
 
   /**
+   * @brief Apply the timeout and keepalive options to the client socket
+   */
+  void _configureClientSocket();
+
+  /**
    * @brief Handle client communication
    */
   void _handleClient();

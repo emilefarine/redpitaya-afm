@@ -231,23 +231,7 @@ void TCPServer::_acceptClient()
     return;
   }
 
-  // Set socket timeout
-  struct timeval tv;
-  tv.tv_sec = ServerConfig::SOCKET_TIMEOUT_SEC;
-  tv.tv_usec = 0;
-  setsockopt(m_clientFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-  setsockopt(m_clientFd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-
-  // Detect dead peers: ~2 min (60s idle + 6 probes * 10s) instead of holding
-  // the single client slot until the 1 hour idle timeout
-  int keepAlive = 1;
-  int keepIdle = 60;
-  int keepInterval = 10;
-  int keepCount = 6;
-  setsockopt(m_clientFd, SOL_SOCKET, SO_KEEPALIVE, &keepAlive, sizeof(keepAlive));
-  setsockopt(m_clientFd, IPPROTO_TCP, TCP_KEEPIDLE, &keepIdle, sizeof(keepIdle));
-  setsockopt(m_clientFd, IPPROTO_TCP, TCP_KEEPINTVL, &keepInterval, sizeof(keepInterval));
-  setsockopt(m_clientFd, IPPROTO_TCP, TCP_KEEPCNT, &keepCount, sizeof(keepCount));
+  _configureClientSocket();
 
   char clientIP[INET_ADDRSTRLEN];
   inet_ntop(AF_INET, &clientAddr.sin_addr, clientIP, sizeof(clientIP));
@@ -256,6 +240,46 @@ void TCPServer::_acceptClient()
   // Send welcome message
   std::string welcome = "AFM SCPI Server v" + VersionInfo::toString() + " Ready\n";
   sendToClient(welcome);
+}
+
+void TCPServer::_configureClientSocket()
+{
+  struct timeval tv;
+  tv.tv_sec = ServerConfig::SOCKET_TIMEOUT_SEC;
+  tv.tv_usec = 0;
+
+  // Detect dead peers: ~2 min (60s idle + 6 probes * 10s) instead of holding
+  // the single client slot until the 1 hour idle timeout
+  const int keepAlive = 1;
+  const int keepIdle = 60;
+  const int keepInterval = 10;
+  const int keepCount = 6;
+
+  struct SocketOption
+  {
+    int level;
+    int name;
+    const void* value;
+    socklen_t size;
+    const char* label;
+  };
+  const SocketOption options[] = {
+      {SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv), "SO_RCVTIMEO"},
+      {SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv), "SO_SNDTIMEO"},
+      {SOL_SOCKET, SO_KEEPALIVE, &keepAlive, sizeof(keepAlive), "SO_KEEPALIVE"},
+      {IPPROTO_TCP, TCP_KEEPIDLE, &keepIdle, sizeof(keepIdle), "TCP_KEEPIDLE"},
+      {IPPROTO_TCP, TCP_KEEPINTVL, &keepInterval, sizeof(keepInterval), "TCP_KEEPINTVL"},
+      {IPPROTO_TCP, TCP_KEEPCNT, &keepCount, sizeof(keepCount), "TCP_KEEPCNT"},
+  };
+
+  for (const SocketOption& option : options)
+  {
+    if (setsockopt(m_clientFd, option.level, option.name, option.value, option.size) < 0)
+    {
+      _log("Warning: cannot set " + std::string(option.label) + ": " +
+           std::string(strerror(errno)));
+    }
+  }
 }
 
 void TCPServer::_handleClient()
