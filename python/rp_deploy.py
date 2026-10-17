@@ -585,4 +585,6 @@ def main():
     return exit_code
 
 if __name__ == "__main__":
+    # Remote output such as the systemctl status bullet must not crash a cp1252 console
+    sys.stdout.reconfigure(errors="replace")
     sys.exit(main())
