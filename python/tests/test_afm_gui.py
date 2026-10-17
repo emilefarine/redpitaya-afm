@@ -304,6 +304,66 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertFalse(client.is_connected)
         self.assertEqual(self.window.connect_btn.text(), "Connect")
 
+    @staticmethod
+    def _resonance(freq, f0, q, delay_s):
+        """Lorentzian response and its phase with a path delay (rad)."""
+        response = 1.0 / (1.0 + 1j * 2.0 * q * (freq - f0) / f0)
+        return response, np.angle(response) - 2.0 * np.pi * freq * 1e3 * delay_s
+
+    def _displayed_phase(self, freq, magnitude, phase_rad, mode="sweep"):
+        self.window._last_measure_mode = mode
+        spectrum = SpectrumData(freq_kHz=freq, magnitude=magnitude, phase_rad=phase_rad)
+        return self.window._prepare_display_data(spectrum)[2]
+
+    def test_sweep_phase_keeps_the_resonance_step(self):
+        f0, q = 32.768, 5000.0
+        bandwidth = f0 / q
+        for span in (4, 10, 40, 200):
+            freq = np.linspace(f0 - span * bandwidth / 2, f0 + span * bandwidth / 2, 401)
+            response, phase = self._resonance(freq, f0, q, 2e-6)
+            true_deg = np.degrees(np.unwrap(np.angle(response)))
+            shown = self._displayed_phase(freq, np.abs(response), phase)
+
+            peak = int(np.argmax(np.abs(response)))
+            error = np.abs((shown - shown[peak]) - (true_deg - true_deg[peak]))
+            self.assertLess(error.max(), 12.0, f"span {span} bandwidths")
+            # A lag across the resonance stays a lag
+            self.assertGreater(shown[0] - shown[-1], 140.0, f"span {span} bandwidths")
+
+    def test_sinc_phase_removes_delay_and_keeps_the_step(self):
+        freq = np.linspace(150.0, 250.0, 419)
+        response, phase = self._resonance(freq, 200.0, 400.0, 20e-6)
+        phase = phase.copy()
+        phase[::2] += np.pi  # the alternation of a centred sinc pulse
+        shown = self._displayed_phase(freq, np.abs(response), phase, mode="sinc")
+
+        true_deg = np.degrees(np.unwrap(np.angle(response)))
+        peak = int(np.argmax(np.abs(response)))
+        error = np.abs((shown - shown[peak]) - (true_deg - true_deg[peak]))
+        self.assertLess(error.max(), 6.0)
+
+    def test_flat_response_delay_is_removed(self):
+        freq = np.linspace(150.0, 250.0, 201)
+        phase = -2.0 * np.pi * freq * 1e3 * 20e-6
+        shown = self._displayed_phase(freq, np.ones_like(freq), phase)
+        self.assertLess(np.ptp(shown), 0.5)
+
+    def test_raw_phase_when_delay_removal_is_off(self):
+        f0, q = 32.768, 5000.0
+        freq = np.linspace(f0 - 0.03, f0 + 0.03, 201)
+        response, phase = self._resonance(freq, f0, q, 2e-6)
+        self.window.remove_delay_check.setChecked(False)
+        shown = self._displayed_phase(freq, np.abs(response), phase)
+        np.testing.assert_allclose(shown, np.degrees(np.unwrap(phase)), atol=1e-6)
+
+    def test_narrow_sweep_inside_resonance_is_left_untouched(self):
+        f0, q = 32.768, 5000.0
+        bandwidth = f0 / q
+        freq = np.linspace(f0 - 0.75 * bandwidth, f0 + 0.75 * bandwidth, 201)
+        response, phase = self._resonance(freq, f0, q, 2e-6)
+        shown = self._displayed_phase(freq, np.abs(response), phase)
+        np.testing.assert_allclose(shown, np.degrees(np.unwrap(phase)), atol=1e-6)
+
     def test_peak_detection_and_display(self):
         freq = np.linspace(100.0, 200.0, 256)
         mag = np.exp(-((freq - 150.0) / 5.0) ** 2) + 0.01

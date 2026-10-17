@@ -133,6 +133,48 @@ protected:
         })));
   }
 
+  struct SpectrumRow
+  {
+    double freqKHz;
+    double magnitude;
+    double phaseRad;
+  };
+
+  std::vector<SpectrumRow> parseSpectrum(const std::string& resp)
+  {
+    std::vector<SpectrumRow> rows;
+    std::istringstream stream(resp);
+    std::string line;
+    std::getline(stream, line); // header
+    while (std::getline(stream, line))
+    {
+      SpectrumRow row{};
+      char separator = 0;
+      std::istringstream fields(line);
+      if (fields >> row.freqKHz >> separator >> row.magnitude >> separator >> row.phaseRad)
+      {
+        rows.push_back(row);
+      }
+    }
+    return rows;
+  }
+
+  // Acquisition returns amplitude * sin(2 pi f t + phase) at the decimated rate
+  void respondWithSine(double freqHz, double amplitude, double phaseRad, uint16_t decimation = 64)
+  {
+    const double samplingFreq = 125000000.0 / decimation;
+    ON_CALL(*m_rawHw, getAcquiredSignal(_))
+        .WillByDefault(WithArg<0>(Invoke([=](std::vector<float>& s) {
+          for (size_t i = 0; i < s.size(); ++i)
+          {
+            s[i] = static_cast<float>(
+                amplitude * sin(2.0 * M_PI * freqHz * static_cast<double>(i) / samplingFreq +
+                                phaseRad));
+          }
+          return true;
+        })));
+  }
+
   bool parseDataHeader(const std::string& resp, size_t& count, size_t& bytes)
   {
     std::istringstream header(resp.substr(0, resp.find('\n')));
@@ -671,6 +713,98 @@ TEST_F(CommandHandlerTest, SweepLastPointStaysBelowNyquist)
   EXPECT_FALSE(m_handler->getStatus().measurementInProgress);
 }
 
+TEST_F(CommandHandlerTest, SweepIncludesStopFrequencyWithFractionalStep)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+
+  // 0.1, 0.2 and 0.05 are not exact in float: the stop point must survive
+  auto rows = parseSpectrum(send("MEASURE:SWEEP 200,10,0.1"));
+  ASSERT_EQ(rows.size(), 101u);
+  EXPECT_NEAR(rows.front().freqKHz, 195.0, 1e-3);
+  EXPECT_NEAR(rows.back().freqKHz, 205.0, 1e-3);
+
+  EXPECT_EQ(parseSpectrum(send("MEASURE:SWEEP 200,10,0.2")).size(), 51u);
+  EXPECT_EQ(parseSpectrum(send("MEASURE:SWEEP 200,10,0.05")).size(), 201u);
+
+  rows = parseSpectrum(send("MEASURE:SWEEP 200,1,0.1"));
+  ASSERT_EQ(rows.size(), 11u);
+  EXPECT_NEAR(rows.back().freqKHz, 200.5, 1e-3);
+}
+
+TEST_F(CommandHandlerTest, SweepFrequenciesAreEvenlySpacedAndNeverExceedStop)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+
+  auto rows = parseSpectrum(send("MEASURE:SWEEP 200,10,0.1"));
+  ASSERT_EQ(rows.size(), 101u);
+  for (size_t i = 0; i < rows.size(); ++i)
+  {
+    EXPECT_NEAR(rows[i].freqKHz, 195.0 + 0.1 * static_cast<double>(i), 1.5e-3) << "point " << i;
+    EXPECT_LE(rows[i].freqKHz, 205.0);
+  }
+}
+
+TEST_F(CommandHandlerTest, SweepFullSizeKeepsLastPoint)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+
+  // 4096 points is the maximum: 409.5 / 0.1 must not round down to 4095
+  auto rows = parseSpectrum(send("MEASURE:SWEEP 500,409.5,0.1"));
+  ASSERT_EQ(rows.size(), 4096u);
+  EXPECT_NEAR(rows.back().freqKHz, 704.75, 1e-3);
+}
+
+TEST_F(CommandHandlerTest, SweepReportsMagnitudeAndPhaseOfResponse)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+
+  // One point at 199.75 kHz; the response lags the excitation by 30 degrees
+  respondWithSine(199750.0, 0.5, -M_PI / 6.0);
+  auto rows = parseSpectrum(send("MEASURE:SWEEP 200,0.5,1"));
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_NEAR(rows[0].freqKHz, 199.75, 1e-3);
+  EXPECT_NEAR(rows[0].magnitude, 0.5, 5e-3);
+  EXPECT_NEAR(rows[0].phaseRad, -M_PI / 6.0, 1e-2);
+
+  // A lead is reported positive
+  respondWithSine(199750.0, 0.25, M_PI / 3.0);
+  rows = parseSpectrum(send("MEASURE:SWEEP 200,0.5,1"));
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_NEAR(rows[0].magnitude, 0.25, 5e-3);
+  EXPECT_NEAR(rows[0].phaseRad, M_PI / 3.0, 1e-2);
+}
+
+TEST_F(CommandHandlerTest, SweepLoopbackGivesZeroPhaseAndExcitationAmplitude)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+
+  // Acquisition = the generated signal: unit gain, no phase shift
+  auto loaded = std::make_shared<std::vector<float>>();
+  ON_CALL(*m_rawHw, loadGenerationSignal(_))
+      .WillByDefault(Invoke([loaded](const std::vector<float>& signal) {
+        *loaded = signal;
+        return true;
+      }));
+  ON_CALL(*m_rawHw, getAcquiredSignal(_))
+      .WillByDefault(WithArg<0>(Invoke([loaded](std::vector<float>& s) {
+        std::copy_n(loaded->begin(), std::min(s.size(), loaded->size()), s.begin());
+        return true;
+      })));
+
+  auto rows = parseSpectrum(send("MEASURE:SWEEP 200,10,1,64,0.8"));
+  ASSERT_EQ(rows.size(), 11u);
+  for (const auto& row : rows)
+  {
+    EXPECT_NEAR(row.magnitude, 0.8, 1e-2) << row.freqKHz;
+    EXPECT_NEAR(row.phaseRad, 0.0, 1e-2) << row.freqKHz;
+  }
+}
+
 TEST_F(CommandHandlerTest, SweepSinglePointSucceeds)
 {
   initHardware(true);
@@ -735,6 +869,61 @@ TEST_F(CommandHandlerTest, ExceptionFromHardwareClearsBusyFlag)
 
   EXPECT_THROW(send("MEASURE:SINC 200,100"), std::runtime_error);
   EXPECT_FALSE(m_handler->getStatus().measurementInProgress);
+}
+
+TEST_F(CommandHandlerTest, MeasSincReportsPeakAtSignalFrequencyAndLevel)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+
+  // Bin 839 of 8192 at decimation 64: 200.0336 kHz, no scalloping loss
+  const double binHz = 125000000.0 / 64.0 / 8192.0;
+  const double signalHz = 839.0 * binHz;
+
+  auto peakOf = [&](double amplitude) {
+    respondWithSine(signalHz, amplitude, 0.0);
+    auto rows = parseSpectrum(send("MEASURE:SINC 200,100,8192,64,1"));
+    EXPECT_FALSE(rows.empty());
+    SpectrumRow peak{};
+    for (const auto& row : rows)
+    {
+      // Only the requested band is returned
+      EXPECT_GE(row.freqKHz, 150.0 - 1e-3);
+      EXPECT_LE(row.freqKHz, 250.0 + 1e-3);
+      if (row.magnitude > peak.magnitude)
+      {
+        peak = row;
+      }
+    }
+    return peak;
+  };
+
+  // Hann window, amplitude spectrum scaled by 1/N: a sine of amplitude A peaks at A/4
+  SpectrumRow peak = peakOf(0.5);
+  EXPECT_NEAR(peak.freqKHz, signalHz / 1000.0, 1e-3);
+  EXPECT_NEAR(peak.magnitude, 0.125, 1.5e-3);
+
+  // Linear in the signal level
+  EXPECT_NEAR(peakOf(0.25).magnitude, 0.0625, 1e-3);
+}
+
+TEST_F(CommandHandlerTest, RejectedMeasurementKeepsSaturationEvidence)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(1024);
+
+  ON_CALL(*m_rawHw, getAcquiredSignal(_))
+      .WillByDefault(WithArg<0>(Invoke([](std::vector<float>& s) {
+        s.assign(1024, 1.0f);
+        return true;
+      })));
+  EXPECT_EQ(send("MEASURE:SINC 200,100,1024,64,1").compare(0, 3, "OK "), 0);
+  EXPECT_NE(send("SYSTEM:STATUS?").find("SAT=1"), std::string::npos);
+
+  // A plain parameter error must not clear what the last acquisition showed
+  EXPECT_NE(send("MEASURE:SINC 3900,200").find("ERR_PARAM"), std::string::npos);
+  EXPECT_NE(send("MEASURE:SWEEP 970,20").find("ERR_PARAM"), std::string::npos);
+  EXPECT_NE(send("SYSTEM:STATUS?").find("SAT=1"), std::string::npos);
 }
 
 TEST_F(CommandHandlerTest, MeasSincSucceeds)

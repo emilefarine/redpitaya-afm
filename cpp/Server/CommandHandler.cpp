@@ -30,6 +30,9 @@ namespace AFM
 namespace
 {
 
+// Covers the rounding of a float step in the sweep point count
+constexpr double c_SweepStepTolerance = 1.0e-6;
+
 class ScopedMeasurement
 {
 public:
@@ -814,7 +817,9 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
   if (!_validateNyquist(stopKHz * 1000.0, dec, error))
     return error;
 
-  double pointsEstimate = std::floor((stopKHz - startKHz) / stepKHz) + 1.0;
+  // Relative tolerance: a float step such as 0.1 must not drop the stop frequency
+  double pointsEstimate =
+      std::floor((stopKHz - startKHz) / stepKHz * (1.0 + c_SweepStepTolerance)) + 1.0;
   if (pointsEstimate > static_cast<double>(ServerConfig::MAX_SWEEP_POINTS))
   {
     std::ostringstream oss;
@@ -852,7 +857,7 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
 
   for (size_t point = 0; point < numPoints; ++point)
   {
-    double freqKHz = startKHz + static_cast<double>(point) * stepKHz;
+    double freqKHz = std::min(startKHz + static_cast<double>(point) * stepKHz, stopKHz);
     double freqHz = freqKHz * 1000.0;
 
     auto signal = m_signalGen->generateSineWave(sweepSamples, freqHz, amplitude);
@@ -905,7 +910,8 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
     sumCos *= 2.0 / sweepSamples;
 
     float magnitude = static_cast<float>(std::sqrt(sumSin * sumSin + sumCos * sumCos));
-    float phaseRad = static_cast<float>(std::atan2(sumSin, sumCos));
+    // Phase of the response relative to the sine excitation (negative = lag)
+    float phaseRad = static_cast<float>(std::atan2(sumCos, sumSin));
 
     spectrum.push_back({static_cast<float>(freqKHz), magnitude, phaseRad});
 

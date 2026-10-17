@@ -46,6 +46,10 @@ GAIN_LABELS = ["1/8", "1/4", "1/2", "1", "2", "4", "8", "16"]
 # only the interior avoids latching onto those edge spikes.
 PEAK_EDGE_MARGIN_FRAC = 0.02
 
+# Delay slope fit: skip this many -3 dB widths around the peak, need this many points per side
+DELAY_FIT_EXCLUDE_BW = 3
+DELAY_FIT_MIN_POINTS = 3
+
 STYLESHEET = f"""
 QMainWindow, QWidget {{
     background-color: {DARK_BG};
@@ -562,6 +566,14 @@ class AFMMainWindow(QMainWindow):
         layout.addWidget(self.unwrap_phase_sweep_check, row, 0, 1, 2)
 
         row += 1
+        self.remove_delay_check = QCheckBox("Remove delay slope")
+        self.remove_delay_check.setChecked(True)
+        self.remove_delay_check.setToolTip(
+            "Subtract the linear phase of the signal path delay. Untick for the raw phase.")
+        self.remove_delay_check.toggled.connect(self._on_phase_unwrap_toggled)
+        layout.addWidget(self.remove_delay_check, row, 0, 1, 2)
+
+        row += 1
         self.measure_btn = QPushButton("▶  Measure")
         self.measure_btn.setStyleSheet(
             self.measure_btn.styleSheet() + "font-size: 14px; min-height: 36px;")
@@ -1049,8 +1061,9 @@ class AFMMainWindow(QMainWindow):
         _ = checked
         sinc_mode = "ON" if self.unwrap_phase_sinc_check.isChecked() else "OFF"
         sweep_mode = "ON" if self.unwrap_phase_sweep_check.isChecked() else "OFF"
+        delay_mode = "ON" if self.remove_delay_check.isChecked() else "OFF"
         self.statusBar().showMessage(
-            f"Phase unwrap: sinc={sinc_mode}, sweep={sweep_mode}")
+            f"Phase unwrap: sinc={sinc_mode}, sweep={sweep_mode}; delay removal: {delay_mode}")
 
         if self._last_spectrum is not None and self._last_spectrum.num_points > 0:
             self._update_plots(self._last_spectrum)
@@ -1125,6 +1138,40 @@ class AFMMainWindow(QMainWindow):
             ri += 1
         return li, ri
 
+    def _delay_slope(self, freq_khz: np.ndarray, phase_deg: np.ndarray,
+                     mag: np.ndarray, edge_margin: int = 0) -> float:
+        """Slope (deg/kHz) of the path delay, leaving the resonance phase step alone.
+
+        Fits one slope with a separate offset on each side of the resonance,
+        outside ``DELAY_FIT_EXCLUDE_BW`` bandwidths, so the step across the
+        resonance drops out. Returns 0 when the resonance fills the span.
+        """
+        n = int(freq_khz.size)
+        lo, hi = edge_margin, n - edge_margin
+        if hi - lo < 8:
+            lo, hi = 0, n
+        f, ph = freq_khz[lo:hi], phase_deg[lo:hi]
+        m = self._median_filter(mag, 5)[lo:hi]
+        if f.size < 3:
+            return 0.0
+
+        peak = int(np.argmax(m))
+        li, ri = self._find_3db_region(m, peak)
+        if li == 0 and ri == m.size - 1:
+            # Flat response: no step to protect
+            return float(np.polyfit(f, ph, 1)[0])
+
+        guard = DELAY_FIT_EXCLUDE_BW * (ri - li + 1)
+        idx = np.arange(f.size)
+        sides = [side for side in (idx < peak - guard, idx > peak + guard)
+                 if np.count_nonzero(side) >= DELAY_FIT_MIN_POINTS]
+        if not sides:
+            return 0.0
+
+        used = np.any(sides, axis=0)
+        design = np.column_stack([f - f[peak]] + [side.astype(float) for side in sides])[used]
+        return float(np.linalg.lstsq(design, ph[used], rcond=None)[0][0])
+
     # ---------------------------------------------------------------
     # Plotting
     # ---------------------------------------------------------------
@@ -1137,48 +1184,26 @@ class AFMMainWindow(QMainWindow):
         def _wrap_deg(values: np.ndarray) -> np.ndarray:
             return (values + 180.0) % 360.0 - 180.0
 
-        if self._last_measure_mode == "sinc":
-            # Match legacy sinc viewer behavior:
-            # 1) convert rad->deg
-            # 2) correct alternating 180-deg FFT bin offset
-            # 3) remove global linear delay trend to avoid 10k+ deg ramps
-            # 4) unwrap or wrap depending on sinc toggle
-            phase_deg = np.degrees(phase_rad)
-            if phase_deg.size > 1:
-                phase_deg[::2] -= 180.0
+        is_sinc = self._last_measure_mode == "sinc"
+        phase_deg = np.degrees(phase_rad)
+        if is_sinc and phase_deg.size > 1:
+            # Sinc pulse centred in the record: 180 deg alternation between FFT bins
+            phase_deg[::2] -= 180.0
 
-            # First wrap, then unwrap in a stable way
-            phase_wrapped = _wrap_deg(phase_deg)
-            phase_unwrapped = np.degrees(np.unwrap(np.deg2rad(phase_wrapped)))
-
-            # Remove linear phase slope (delay component), anchored at resonance peak
-            phase_compensated = phase_unwrapped
-            if phase_unwrapped.size > 1:
-                peak_idx = self._find_peak_index(mag_raw)
-                f0 = freq_khz[peak_idx]
-                slope, _ = np.polyfit(freq_khz, phase_unwrapped, 1)
-                phase_compensated = phase_unwrapped - slope * (freq_khz - f0)
-
-            if self.unwrap_phase_sinc_check.isChecked():
-                phase_deg = phase_compensated
-            else:
-                phase_deg = _wrap_deg(phase_compensated)
-        else:
-            # Sweep lock-in phase contains the acquisition path delay
-            # (DAC -> board -> ADC -> decimator) as a linear-in-frequency
-            # term that hides the resonance signature. Remove it the same
-            # way as the sinc branch: wrap, unwrap, fit the global linear
-            # slope, subtract it anchored at the resonance peak.
-            phase_deg = _wrap_deg(np.degrees(phase_rad))
-            if phase_deg.size > 1:
-                phase_deg = np.degrees(np.unwrap(np.deg2rad(phase_deg)))
-                peak_idx = self._find_peak_index(mag_raw)
-                f0 = freq_khz[peak_idx]
-                slope, _ = np.polyfit(freq_khz, phase_deg, 1)
+        phase_deg = _wrap_deg(phase_deg)
+        if phase_deg.size > 1:
+            phase_deg = np.degrees(np.unwrap(np.deg2rad(phase_deg)))
+            if self.remove_delay_check.isChecked():
+                margin = (max(3, int(round(phase_deg.size * PEAK_EDGE_MARGIN_FRAC)))
+                          if is_sinc else 0)
+                slope = self._delay_slope(freq_khz, phase_deg, mag_raw, margin)
+                f0 = freq_khz[self._find_peak_index(mag_raw)]
                 phase_deg = phase_deg - slope * (freq_khz - f0)
-            if not self.unwrap_phase_sweep_check.isChecked():
-                # Optional wrapped sweep display.
-                phase_deg = _wrap_deg(phase_deg)
+
+        unwrap_check = (self.unwrap_phase_sinc_check if is_sinc
+                        else self.unwrap_phase_sweep_check)
+        if not unwrap_check.isChecked():
+            phase_deg = _wrap_deg(phase_deg)
 
         max_freq_khz = float(np.max(np.abs(freq_khz))) if freq_khz.size else 0.0
         if max_freq_khz >= 1000.0:

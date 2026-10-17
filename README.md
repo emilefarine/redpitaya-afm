@@ -218,6 +218,9 @@ every line ends with `\n`. Responses are a single line: `OK [data]` or `ERR_<COD
 `freq_kHz,magnitude,phase_rad`. `<BYTES>` is the exact size of the payload that follows the
 header line, so a client can read it in one shot instead of scanning for newlines.
 
+For `MEASURE:SWEEP`, `phase_rad` is the phase of the response relative to the excitation
+(negative = lag). For `MEASURE:SINC` it is the FFT phase of the acquired record.
+
 ## MUX board firmware
 
 The analog board is controlled by an on-board **LPC1114** microcontroller (MUX routing,

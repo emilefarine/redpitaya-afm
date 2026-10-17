@@ -333,7 +333,7 @@ TEST(ProtocolTest, ServerConfigConstants)
 
 TEST(ProtocolTest, VersionInfoToString)
 {
-  EXPECT_EQ(VersionInfo::toString(), "2.6.0");
+  EXPECT_EQ(VersionInfo::toString(), "2.7.0");
 }
 
 TEST(ProtocolTest, ParsesAdcProtectCommand)
