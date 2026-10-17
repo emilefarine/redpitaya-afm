@@ -25,10 +25,11 @@ public:
   RedPitayaHardware();
   ~RedPitayaHardware() override;
 
+  RedPitayaHardware(const RedPitayaHardware&) = delete;
+  RedPitayaHardware& operator=(const RedPitayaHardware&) = delete;
+
   bool initialize() override;
   void cleanup() override;
-
-  uint32_t getVersion() override; // Returns 0x15062026 (date) if correct bitfile loaded
 
   // Signal generation (DAC)
   bool loadGenerationSignal(const std::vector<float>& signal) override;
@@ -43,13 +44,14 @@ public:
   bool getAcquiredSignal(std::vector<float>& signal) override;
 
   bool resetMeasurement() override;
-  uint32_t readStatusRegister() override; // Public accessor for STATUS register (test observability)
-  uint32_t readDelayRegister() override;  // Read back REG_DELAY to verify clamping
-  bool clearStatusRegister() override;    // Clear sticky STATUS flags (e.g., ps_access_denied)
 
 private:
   bool _mapWindows();
   void _unmapWindows();
+
+  uint32_t _readVersion() const; // 0x15062026 (date) with the correct bitfile
+  uint32_t _readStatus() const;
+  bool _clearStatus(); // Clears the sticky ps_access_denied flag
 
   bool _isMapped() const;
 
@@ -69,6 +71,9 @@ private:
   static constexpr uint32_t REG_VERSION = 7;       // Read-only version register (date of bitfile)
   static constexpr uint32_t REG_DECIMATION = 8;
   static constexpr uint32_t REG_STATUS = 9; // [0]=busy, [1]=ps_access_denied (write clears sticky)
+
+  static constexpr uint32_t STATUS_BUSY_BIT = 0x01;             // FSM in RUNNING state
+  static constexpr uint32_t STATUS_PS_ACCESS_DENIED_BIT = 0x02; // PS accessed BRAM while busy
 
   static constexpr std::size_t REG_WINDOW_SIZE = 4096UL;
   static constexpr std::size_t BRAM_WINDOW_SIZE =

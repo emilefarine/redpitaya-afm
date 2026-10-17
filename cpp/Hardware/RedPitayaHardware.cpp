@@ -46,10 +46,10 @@ bool RedPitayaHardware::initialize()
     return false;
   }
 
-  if (getVersion() != 0x15062026) // Date of correct bitfile (VERSION in fpga register)
+  if (_readVersion() != 0x15062026) // Date of correct bitfile (VERSION in fpga register)
   {
     std::cerr << "Error: Incorrect FPGA bitfile loaded!" << std::endl;
-    std::cerr << "       VERSION register = 0x" << std::hex << getVersion() << std::dec
+    std::cerr << "       VERSION register = 0x" << std::hex << _readVersion() << std::dec
               << std::endl;
     cleanup();
     return false;
@@ -58,7 +58,7 @@ bool RedPitayaHardware::initialize()
   std::cout << "Hardware initialized" << std::endl;
 
   // Reset to known state
-  clearStatusRegister();
+  _clearStatus();
   resetMeasurement();
 
   if (!setDecimation(DEFAULT_DECIMATION))
@@ -85,7 +85,7 @@ void RedPitayaHardware::cleanup()
   }
 }
 
-uint32_t RedPitayaHardware::getVersion()
+uint32_t RedPitayaHardware::_readVersion() const
 {
   return _isMapped() ? m_regs[REG_VERSION] : 0;
 }
@@ -105,7 +105,7 @@ bool RedPitayaHardware::loadGenerationSignal(const std::vector<float>& signal)
     return false;
   }
 
-  uint32_t status = readStatusRegister();
+  uint32_t status = _readStatus();
   if (status & STATUS_BUSY_BIT)
   {
     std::cerr << "Error: Cannot load signal while a measurement is running (FSM is RUNNING)."
@@ -114,7 +114,7 @@ bool RedPitayaHardware::loadGenerationSignal(const std::vector<float>& signal)
   }
 
   // Clear stale sticky flags so denials caused by this transfer are visible.
-  clearStatusRegister();
+  _clearStatus();
 
   for (size_t i = 0; i < signal.size(); ++i)
   {
@@ -122,7 +122,7 @@ bool RedPitayaHardware::loadGenerationSignal(const std::vector<float>& signal)
     m_bram[i] = static_cast<uint32_t>(dacValue);
   }
 
-  if (readStatusRegister() & STATUS_PS_ACCESS_DENIED_BIT)
+  if (_readStatus() & STATUS_PS_ACCESS_DENIED_BIT)
   {
     std::cerr << "Error: BRAM write denied (measurement was running); signal is incomplete"
               << std::endl;
@@ -152,7 +152,7 @@ bool RedPitayaHardware::startMeasurement(uint32_t numSamples, uint32_t delaySamp
     return false;
   }
 
-  uint32_t status = readStatusRegister();
+  uint32_t status = _readStatus();
   if (status & STATUS_BUSY_BIT)
   {
     std::cerr << "Error: Measurement already in progress (FSM is RUNNING). "
@@ -219,7 +219,7 @@ bool RedPitayaHardware::getAcquiredSignal(std::vector<float>& signal)
     return false;
   }
 
-  uint32_t status = readStatusRegister();
+  uint32_t status = _readStatus();
   if (status & STATUS_BUSY_BIT)
   {
     std::cerr << "Error: Measurement still in progress (FSM is RUNNING); data incomplete"
@@ -228,14 +228,14 @@ bool RedPitayaHardware::getAcquiredSignal(std::vector<float>& signal)
   }
 
   // Clear stale sticky flags so denials caused by this transfer are visible.
-  clearStatusRegister();
+  _clearStatus();
 
   for (size_t i = 0; i < signal.size(); ++i)
   {
     signal[i] = DacCodec::adcToVoltage(m_bram[i], m_decimation);
   }
 
-  if (readStatusRegister() & STATUS_PS_ACCESS_DENIED_BIT)
+  if (_readStatus() & STATUS_PS_ACCESS_DENIED_BIT)
   {
     std::cerr << "Error: BRAM read denied (measurement was running); data is invalid"
               << std::endl;
@@ -257,17 +257,12 @@ bool RedPitayaHardware::resetMeasurement()
   return true;
 }
 
-uint32_t RedPitayaHardware::readStatusRegister()
+uint32_t RedPitayaHardware::_readStatus() const
 {
   return m_regs ? m_regs[REG_STATUS] : 0;
 }
 
-uint32_t RedPitayaHardware::readDelayRegister()
-{
-  return m_regs ? m_regs[REG_DELAY] : 0;
-}
-
-bool RedPitayaHardware::clearStatusRegister()
+bool RedPitayaHardware::_clearStatus()
 {
   if (!_isMapped())
   {
