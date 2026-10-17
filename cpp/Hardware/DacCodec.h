@@ -18,7 +18,7 @@ static constexpr int32_t MIN_DAC_VALUE = -8192; // 14-bit signed min
 /**
  * @brief Convert a voltage in [-1 V, 1 V] to the 14-bit signed DAC code
  *
- * Voltages outside the range are clamped.
+ * Rounds to the nearest code; voltages outside the range are clamped.
  */
 inline int16_t voltageToDAC(float voltage)
 {
@@ -39,7 +39,7 @@ inline int16_t voltageToDAC(float voltage)
 
   // Scale to 14-bit signed range
   float scale = static_cast<float>(MAX_DAC_VALUE - MIN_DAC_VALUE) / 2.0f;
-  int16_t value = static_cast<int16_t>(voltage * scale);
+  long value = std::lround(voltage * scale);
 
   // Clamp to range
   if (value > MAX_DAC_VALUE)
@@ -51,7 +51,7 @@ inline int16_t voltageToDAC(float voltage)
     value = MIN_DAC_VALUE;
   }
 
-  return value;
+  return static_cast<int16_t>(value);
 }
 
 /**

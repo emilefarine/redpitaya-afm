@@ -29,13 +29,13 @@ TEST(DacCodecTest, ZeroVoltageGivesZeroCode)
 TEST(DacCodecTest, FullScaleVoltagesGiveFullScaleCodes)
 {
   EXPECT_EQ(DacCodec::voltageToDAC(1.0f), 8191);
-  EXPECT_EQ(DacCodec::voltageToDAC(-1.0f), -8191); // truncation toward zero before clamp
+  EXPECT_EQ(DacCodec::voltageToDAC(-1.0f), -8192);
 }
 
 TEST(DacCodecTest, OutOfRangeVoltagesAreClamped)
 {
   EXPECT_EQ(DacCodec::voltageToDAC(5.0f), 8191);
-  EXPECT_EQ(DacCodec::voltageToDAC(-5.0f), -8191);
+  EXPECT_EQ(DacCodec::voltageToDAC(-5.0f), -8192);
 }
 
 TEST(DacCodecTest, NaNVoltageGivesZeroCode)
@@ -46,12 +46,21 @@ TEST(DacCodecTest, NaNVoltageGivesZeroCode)
 TEST(DacCodecTest, InfiniteVoltagesClampToFullScale)
 {
   EXPECT_EQ(DacCodec::voltageToDAC(std::numeric_limits<float>::infinity()), 8191);
-  EXPECT_EQ(DacCodec::voltageToDAC(-std::numeric_limits<float>::infinity()), -8191);
+  EXPECT_EQ(DacCodec::voltageToDAC(-std::numeric_limits<float>::infinity()), -8192);
 }
 
 TEST(DacCodecTest, HalfScaleVoltage)
 {
-  EXPECT_EQ(DacCodec::voltageToDAC(0.5f), 4095); // 0.5 * 8191.5 truncated
+  EXPECT_EQ(DacCodec::voltageToDAC(0.5f), 4096); // 0.5 * 8191.5 = 4095.75
+}
+
+TEST(DacCodecTest, RoundsToNearestCodeSymmetrically)
+{
+  const float lsb = 1.0f / 8191.5f;
+  EXPECT_EQ(DacCodec::voltageToDAC(0.4f * lsb), 0);
+  EXPECT_EQ(DacCodec::voltageToDAC(-0.4f * lsb), 0);
+  EXPECT_EQ(DacCodec::voltageToDAC(0.9f * lsb), 1);
+  EXPECT_EQ(DacCodec::voltageToDAC(-0.9f * lsb), -1);
 }
 
 TEST(DacCodecTest, AdcZeroRawGivesZeroVolts)
