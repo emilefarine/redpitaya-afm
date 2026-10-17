@@ -111,6 +111,7 @@ class OperatingMode(Enum):
     """Server operating modes matching AFM::OperatingMode"""
     FULL = "FULL"        # Red Pitaya with optional electronic board
     RP_ONLY = "RP_ONLY"  # Red Pitaya only, board disabled
+    UNKNOWN = "UNKNOWN"  # A mode this client does not know (newer server)
 
 
 @dataclass
@@ -194,7 +195,7 @@ class SystemStatus:
                     try:
                         status.mode = OperatingMode(value)
                     except ValueError:
-                        pass
+                        status.mode = OperatingMode.UNKNOWN
                 elif key == 'LOOP':
                     status.adc_loop = None if value.upper() == 'OFF' else value
                 elif key == 'OVERDRIVE':
@@ -238,6 +239,19 @@ class AFMClient:
     MAX_SWEEP_POINTS = 4096
     MAX_BOARD_STATUS_LINES = 256
 
+    # Sweep reply timeout, from the server sweep: 8192 samples per point at 125 MHz / decimation
+    SWEEP_SAMPLES = 8192
+    ADC_SAMPLE_RATE_HZ = 125e6
+    MIN_DECIMATION = 16
+    MAX_DECIMATION = 1024
+    SWEEP_POINT_OVERHEAD_S = 0.1   # Signal load and lock-in per point, measured 10-90 ms in total
+    SWEEP_TIMEOUT_MARGIN_S = 30.0
+
+    # Dead link detection: first probe after 10 s without traffic, 3 probes 5 s apart
+    KEEPALIVE_IDLE_S = 10
+    KEEPALIVE_INTERVAL_S = 5
+    KEEPALIVE_COUNT = 3
+
     def __init__(self,
                  host: str,
                  port: int = DEFAULT_PORT,
@@ -275,14 +289,16 @@ class AFMClient:
         if self._socket:
             raise AFMConnectionError("Already connected")
 
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self._socket.settimeout(self.timeout)
-            self._socket.connect((self.host, self.port))
-            self._recv_buffer = b""
+            sock.settimeout(self.timeout)
+            self._enable_keepalive(sock)
+            sock.connect((self.host, self.port))
         except socket.error as e:
-            self._socket = None
+            sock.close()
             raise AFMConnectionError(f"Failed to connect to {self.host}:{self.port}: {e}")
+        self._socket = sock
+        self._recv_buffer = b""
 
         try:
             # Read welcome message
@@ -294,6 +310,20 @@ class AFMClient:
             self.disconnect()
             raise AFMConnectionError(
                 f"Failed to read welcome from {self.host}:{self.port}: {e}")
+
+    def _enable_keepalive(self, sock: socket.socket) -> None:
+        """Notice a dead link (cable pulled, Red Pitaya off) while waiting for a long reply."""
+        options = [(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)]
+        for name, value in (("TCP_KEEPIDLE", self.KEEPALIVE_IDLE_S),
+                            ("TCP_KEEPINTVL", self.KEEPALIVE_INTERVAL_S),
+                            ("TCP_KEEPCNT", self.KEEPALIVE_COUNT)):
+            if hasattr(socket, name):
+                options.append((socket.IPPROTO_TCP, getattr(socket, name), value))
+        for level, option, value in options:
+            try:
+                sock.setsockopt(level, option, value)
+            except OSError as e:
+                logger.debug(f"Keepalive option {option} not set: {e}")
 
     def disconnect(self) -> None:
         """Disconnect from the server.
@@ -526,6 +556,9 @@ class AFMClient:
                 raise AFMProtocolError(
                     "Server returned a spectrum response; use measure_sinc() "
                     "or measure_sweep() to read it")
+            match = re.fullmatch(r"LINES (\d+)", data)
+            if match:
+                return True, self._read_text_block(int(match.group(1)))
             return True, data
         elif response.startswith("ERR"):
             return False, response
@@ -560,13 +593,16 @@ class AFMClient:
             raise AFMCommandError(header)
         match = re.fullmatch(r"OK LINES (\d+)", header)
         if match:
-            count = int(match.group(1))
-            if count > self.MAX_BOARD_STATUS_LINES:
-                raise AFMProtocolError(f"Board status too long: {count} lines")
-            return "\n".join(self._read_line(timeout_override=timeout) for _ in range(count))
+            return self._read_text_block(int(match.group(1)), timeout)
         if header != "OK" and not header.startswith("OK "):
             raise AFMProtocolError(f"Unexpected board status header: {header}")
         return self._read_legacy_board_status(header, timeout)
+
+    def _read_text_block(self, count: int, timeout: Optional[float] = None) -> str:
+        """Read the lines announced by an "OK LINES <N>" header."""
+        if count > self.MAX_BOARD_STATUS_LINES:
+            raise AFMProtocolError(f"Text reply too long: {count} lines")
+        return "\n".join(self._read_line(timeout_override=timeout) for _ in range(count))
 
     def _read_legacy_board_status(self, header: str, timeout: Optional[float]) -> str:
         """Servers before 2.8.0: unframed block ending with the firmware separator line."""
@@ -631,14 +667,17 @@ class AFMClient:
         """
         Get server operating mode (SYSTEM:MODE?).
 
-        Older servers without the MODE query answer with an error; in that
-        case the request is treated as FULL mode.
+        Older servers without the MODE query answer with an error and run in
+        FULL mode. A mode this client does not know is UNKNOWN.
         """
         try:
             response = self.send_command("SYSTEM:MODE?")
-            return OperatingMode(response)
-        except (AFMCommandError, ValueError):
+        except AFMCommandError:
             return OperatingMode.FULL
+        try:
+            return OperatingMode(response)
+        except ValueError:
+            return OperatingMode.UNKNOWN
 
     def init(self) -> str:
         """
@@ -953,18 +992,9 @@ class AFMClient:
             AFMTimeoutError: If server doesn't respond in time
             AFMBusyError: If another command or measurement is in progress
         """
-        # Calculate dynamic timeout based on sweep parameters. The server caps
-        # sweeps at MAX_SWEEP_POINTS, so mirror that to bound the timeout even
-        # when the user passes a huge or non-finite range/step.
-        num_steps = 1
-        if math.isfinite(range_kHz) and math.isfinite(step_kHz) and step_kHz > 0:
-            ratio = range_kHz / step_kHz
-            if math.isfinite(ratio) and ratio >= 0:
-                num_steps = int(ratio) + 1
-        num_steps = min(max(num_steps, 1), self.MAX_SWEEP_POINTS)
-        estimated_time = num_steps * 2.0
-        sweep_timeout = max(self.timeout, estimated_time + 30.0)
-        logger.info(f"Sweep: {num_steps} steps, timeout set to {sweep_timeout:.0f}s")
+        num_points = self.sweep_points(range_kHz, step_kHz)
+        sweep_timeout = self.sweep_timeout(num_points, decimation)
+        logger.info(f"Sweep: {num_points} points, timeout set to {sweep_timeout:.0f}s")
 
         cmd = (f"MEASURE:SWEEP {center_kHz},{range_kHz},"
                f"{step_kHz},{decimation},{amplitude}")
@@ -972,6 +1002,26 @@ class AFMClient:
             self._flush_buffer()
             self._send(cmd)
             return self._read_spectrum_response(timeout=sweep_timeout)
+
+    @classmethod
+    def sweep_points(cls, range_kHz: float, step_kHz: float) -> int:
+        """Number of MEASURE:SWEEP points, computed and capped like the server."""
+        points = 1
+        if math.isfinite(range_kHz) and math.isfinite(step_kHz) and step_kHz > 0:
+            ratio = range_kHz / step_kHz
+            if math.isfinite(ratio) and ratio >= 0:
+                points = int(math.floor(ratio * (1.0 + 1e-6))) + 1
+        return min(max(points, 1), cls.MAX_SWEEP_POINTS)
+
+    def sweep_timeout(self, num_points: int, decimation: int) -> float:
+        """Reply timeout for a sweep: acquisition and overhead per point, plus a margin."""
+        dec = decimation if isinstance(decimation, (int, float)) else self.MAX_DECIMATION
+        if not math.isfinite(dec):
+            dec = self.MAX_DECIMATION
+        dec = min(max(dec, self.MIN_DECIMATION), self.MAX_DECIMATION)
+        per_point = self.SWEEP_SAMPLES * dec / self.ADC_SAMPLE_RATE_HZ + self.SWEEP_POINT_OVERHEAD_S
+        return max(self.timeout, num_points * per_point + self.SWEEP_TIMEOUT_MARGIN_S)
+
 
 # ------ Convenience Functions --------
 
