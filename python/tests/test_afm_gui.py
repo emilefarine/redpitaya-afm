@@ -608,6 +608,34 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(self.window.dec_combo.currentData(), 64)
         self.assertEqual(self.window.gain_val.count(), len(GAIN_LABELS))
 
+    def test_sidebar_scrolls_instead_of_setting_the_window_height(self):
+        sidebar = self.window.sidebar_scroll.widget()
+        height = self.window.minimumSizeHint().height()
+        self.assertLess(height, sidebar.minimumSizeHint().height())
+        self.assertLess(height, 600)
+
+    def test_board_panel_keeps_its_height_in_a_short_window(self):
+        self.window.show()
+        self.window.resize(1000, 500)
+        QApplication.processEvents()
+        self.assertEqual(self.window.height(), 500)
+        panel = self.window.board_panel
+        self.assertGreaterEqual(panel.height(), panel.minimumSizeHint().height())
+
+    def test_results_do_not_widen_the_window(self):
+        self.window.show()
+        QApplication.processEvents()
+        sidebar = self.window.sidebar_scroll.widget()
+        info_panel = self.window.info_labels["peak_mag"].parentWidget()
+        before = (sidebar.minimumSizeHint().width(), info_panel.minimumSizeHint().width())
+        self.window._update_adc_indicator(SystemStatus(
+            adc_saturated=True, adc_overdrive=True, adc_protect=False, adc_loop="1,1"))
+        for label in self.window.info_labels.values():
+            label.setText("2.9417e+02 uV")
+        QApplication.processEvents()
+        after = (sidebar.minimumSizeHint().width(), info_panel.minimumSizeHint().width())
+        self.assertEqual(after, before)
+
 
 if __name__ == "__main__":
     unittest.main()

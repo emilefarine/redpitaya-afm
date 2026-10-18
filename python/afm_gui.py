@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QGroupBox, QLabel, QLineEdit, QPushButton, QComboBox,
     QRadioButton, QButtonGroup, QSplitter, QStatusBar, QFileDialog,
-    QMessageBox, QSpinBox, QDoubleSpinBox, QFrame, QSizePolicy, QCheckBox,
+    QMessageBox, QSpinBox, QDoubleSpinBox, QFrame, QSizePolicy, QCheckBox, QScrollArea,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QColor, QPainter, QIcon
@@ -48,6 +48,10 @@ PEAK_EDGE_MARGIN_FRAC = 0.02
 # Delay slope fit: skip this many -3 dB widths around the peak, need this many points per side
 DELAY_FIT_EXCLUDE_BW = 3
 DELAY_FIT_MIN_POINTS = 3
+
+# Widest expected result text: the result labels keep this width so a result never resizes
+# the window
+INFO_VALUE_SAMPLE = "-000.000 MHz"
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -278,7 +282,9 @@ class AFMMainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AFM Measurement System")
-        self.resize(1400, 850)
+        available = self.screen().availableGeometry()
+        self.resize(min(1400, int(available.width() * 0.95)),
+                    min(850, int(available.height() * 0.9)))
 
         self.client = AFMClient("192.168.1.100", 5025)
         self._worker: MeasureWorker | None = None
@@ -324,7 +330,6 @@ class AFMMainWindow(QMainWindow):
 
         # --- Left sidebar ---
         sidebar = QWidget()
-        sidebar.setMaximumWidth(340)
         sidebar.setMinimumWidth(280)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
@@ -336,7 +341,18 @@ class AFMMainWindow(QMainWindow):
         sidebar_layout.addWidget(self._build_measurement_panel())
         sidebar_layout.addStretch()
 
-        splitter.addWidget(sidebar)
+        # Scrolls when the screen is shorter than the panels instead of squeezing them
+        sidebar_scroll = QScrollArea()
+        sidebar_scroll.setWidget(sidebar)
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scrollbar_width = sidebar_scroll.verticalScrollBar().sizeHint().width()
+        sidebar_scroll.setMinimumWidth(sidebar.minimumWidth() + scrollbar_width)
+        sidebar_scroll.setMaximumWidth(340 + scrollbar_width)
+        self.sidebar_scroll = sidebar_scroll
+
+        splitter.addWidget(sidebar_scroll)
 
         # --- Right plot area ---
         right = QWidget()
@@ -407,6 +423,7 @@ class AFMMainWindow(QMainWindow):
         self.adc_status_label = QLabel("N/A")
         self.adc_status_label.setStyleSheet(f"color: {TEXT_DIM};")
         self.adc_status_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.adc_status_label.setWordWrap(True)
         layout.addWidget(self.adc_status_label, adc_row, 1)
 
         status_btns = QHBoxLayout()
@@ -698,6 +715,9 @@ class AFMMainWindow(QMainWindow):
             info_grid.addWidget(lbl, row, col)
             val = QLabel("N/A")
             val.setStyleSheet(f"color: {TEXT}; font-weight: bold; font-size: 12px; border: none;")
+            val.ensurePolished()
+            val.setMinimumWidth(val.fontMetrics().horizontalAdvance(INFO_VALUE_SAMPLE))
+            val.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             info_grid.addWidget(val, row, col + 1)
             self.info_labels[key] = val
 
