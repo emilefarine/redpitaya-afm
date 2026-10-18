@@ -18,6 +18,7 @@ import pyqtgraph as pg
 
 from afm_client import (
     AFMClient, AFMError, AFMBusyError, SpectrumData, OperatingMode, GAIN_LABELS, DECIMATIONS,
+    sinc_amplitude_scale,
 )
 from afm_schematic import RoutingSchematicDialog
 
@@ -49,9 +50,21 @@ PEAK_EDGE_MARGIN_FRAC = 0.02
 DELAY_FIT_EXCLUDE_BW = 3
 DELAY_FIT_MIN_POINTS = 3
 
+# A -3 dB band narrower than this many frequency steps shows the resolution, not the resonance
+MIN_RESOLVED_STEPS = 3
+
 # Widest expected result text: the result labels keep this width so a result never resizes
 # the window
 INFO_VALUE_SAMPLE = "-000.000 MHz"
+
+
+def format_hz(hz: float) -> str:
+    if hz >= 1e6:
+        return f"{hz / 1e6:.3f} MHz"
+    if hz >= 1e3:
+        return f"{hz / 1e3:.3f} kHz"
+    return f"{hz:.1f} Hz"
+
 
 STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -299,6 +312,8 @@ class AFMMainWindow(QMainWindow):
         self._measure_time = 0.0
         self._last_measure_mode = "sinc"
         self._pending_measure_mode = "sinc"
+        self._last_measure_params: dict = {}
+        self._pending_measure_params: dict = {}
         self._closing = False
         self.board_available = False
         self._controls_enabled = False
@@ -1102,6 +1117,7 @@ class AFMMainWindow(QMainWindow):
         self.measure_btn.setText("■  Cancel")
         self.statusBar().showMessage(f"Measuring… {desc}")
         self._pending_measure_mode = mode
+        self._pending_measure_params = params
         self._cancelling = False
 
         self._worker = MeasureWorker(self.client, mode, params)
@@ -1136,6 +1152,7 @@ class AFMMainWindow(QMainWindow):
             return
         self._last_spectrum = spectrum
         self._last_measure_mode = self._pending_measure_mode
+        self._last_measure_params = self._pending_measure_params
         self._set_controls_enabled(True)
         self.measure_btn.setText("▶  Measure")
         self._update_plots(spectrum)
@@ -1248,6 +1265,21 @@ class AFMMainWindow(QMainWindow):
             ri += 1
         return li, ri
 
+    @staticmethod
+    def _half_power_edges(freq: np.ndarray, mag: np.ndarray, peak_idx: int):
+        """Frequencies where the magnitude crosses ``peak / sqrt(2)``, interpolated between
+        points. An edge that reaches the end of the span stays on the last point."""
+        li, ri = AFMMainWindow._find_3db_region(mag, peak_idx)
+        threshold = mag[peak_idx] / np.sqrt(2.0)
+
+        def crossing(inside: int, outside: int) -> float:
+            t = (mag[inside] - threshold) / (mag[inside] - mag[outside])
+            return float(freq[inside] + t * (freq[outside] - freq[inside]))
+
+        low = crossing(li, li - 1) if li > 0 else float(freq[li])
+        high = crossing(ri, ri + 1) if ri < mag.size - 1 else float(freq[ri])
+        return low, high
+
     def _delay_slope(self, freq_khz: np.ndarray, phase_deg: np.ndarray,
                      mag: np.ndarray, edge_margin: int = 0) -> float:
         """Slope (deg/kHz) of the path delay, leaving the resonance phase step alone.
@@ -1319,6 +1351,11 @@ class AFMMainWindow(QMainWindow):
             self._freq_unit = "kHz"
         freq_display = freq_khz * freq_scale
 
+        params = self._last_measure_params
+        if is_sinc and "bandwidth" in params:
+            mag_raw = mag_raw * sinc_amplitude_scale(
+                params["bandwidth"], params["samples"], params["decimation"])
+
         max_mag = float(np.max(np.abs(mag_raw))) if mag_raw.size else 0.0
         if max_mag >= 1.0:
             mag_scale = 1.0
@@ -1357,6 +1394,8 @@ class AFMMainWindow(QMainWindow):
         self.mag_plot.setLabel("bottom", "Frequency", units=self._freq_unit)
         self.phase_plot.setLabel("bottom", "Frequency", units=self._freq_unit)
         self.mag_plot.setLabel("left", "Magnitude", units=self._mag_unit)
+        self.mag_plot.setTitle("Magnitude (sine equivalent)"
+                               if self._last_measure_mode == "sinc" else "Magnitude")
 
         # Magnitude
         self.mag_curve.setData(freq, mag)
@@ -1370,10 +1409,8 @@ class AFMMainWindow(QMainWindow):
                 self.mag_plot.removeItem(item)
 
         threshold = mag[peak_idx] / np.sqrt(2)
-        li, ri = self._find_3db_region(mag, peak_idx)
-        if ri > li:
-            f_low = freq[li]
-            f_high = freq[ri]
+        f_low, f_high = self._half_power_edges(freq, mag, peak_idx)
+        if f_high > f_low:
             line_pen = pg.mkPen("#22c55e", width=1, style=Qt.PenStyle.DotLine)
             self.mag_plot.addItem(pg.InfiniteLine(pos=f_low, angle=90, pen=line_pen))
             self.mag_plot.addItem(pg.InfiniteLine(pos=f_high, angle=90, pen=line_pen))
@@ -1407,6 +1444,7 @@ class AFMMainWindow(QMainWindow):
         if spectrum.num_points == 0:
             for key in ("peak_freq", "peak_mag", "peak_phase", "bw", "q_factor"):
                 self.info_labels[key].setText("N/A")
+                self.info_labels[key].setToolTip("")
             self.info_labels["points"].setText("0")
             self.info_labels["meas_time"].setText(f"{self._measure_time:.2f} s")
             return
@@ -1417,7 +1455,7 @@ class AFMMainWindow(QMainWindow):
         peak_idx = self._find_peak_index(mag)
 
         self.info_labels["peak_freq"].setText(f"{freq[peak_idx]:.3f} {self._freq_unit}")
-        self.info_labels["peak_mag"].setText(f"{mag[peak_idx]:.4e} {self._mag_unit}")
+        self.info_labels["peak_mag"].setText(f"{mag[peak_idx]:.4g} {self._mag_unit}")
         self.info_labels["peak_phase"].setText(f"{phase_deg[peak_idx]:.1f}°")
         self.info_labels["points"].setText(str(spectrum.num_points))
         self.info_labels["meas_time"].setText(f"{self._measure_time:.2f} s")
@@ -1425,23 +1463,26 @@ class AFMMainWindow(QMainWindow):
         # -3dB bandwidth and Q-factor from raw kHz, measured as the contiguous
         # half-power band around the detected peak (walking outward), so the
         # band-edge noise spikes can't blow up the bandwidth.
-        mag_raw = spectrum.magnitude
-        li, ri = self._find_3db_region(mag_raw, peak_idx)
-        bw_khz = spectrum.freq_kHz[ri] - spectrum.freq_kHz[li]
-        if ri > li and bw_khz > 0:
-            q = spectrum.freq_kHz[peak_idx] / bw_khz
-            bw_hz = bw_khz * 1000.0
-            if bw_hz >= 1e6:
-                bw_text = f"{bw_hz / 1e6:.3f} MHz"
-            elif bw_hz >= 1e3:
-                bw_text = f"{bw_hz / 1e3:.3f} kHz"
-            else:
-                bw_text = f"{bw_hz:.1f} Hz"
-            self.info_labels["bw"].setText(bw_text)
-            self.info_labels["q_factor"].setText(f"{q:.0f}")
+        freq_khz = spectrum.freq_kHz.astype(np.float64)
+        f_low, f_high = self._half_power_edges(freq_khz, spectrum.magnitude, peak_idx)
+        bw_khz = f_high - f_low
+        f0_khz = freq_khz[peak_idx]
+        step_khz = float(np.median(np.diff(freq_khz))) if freq_khz.size > 1 else 0.0
+        limit_khz = MIN_RESOLVED_STEPS * step_khz
+        tooltip = ""
+        if bw_khz <= 0:
+            bw_text = q_text = "N/A"
+        elif bw_khz < limit_khz:
+            bw_text = f"< {format_hz(limit_khz * 1e3)}"
+            q_text = f"> {f0_khz / limit_khz:.0f}"
+            tooltip = (f"Narrower than {MIN_RESOLVED_STEPS} frequency steps: the resolution, "
+                       "not the resonance. Use more samples, a higher decimation or a finer step.")
         else:
-            self.info_labels["bw"].setText("N/A")
-            self.info_labels["q_factor"].setText("N/A")
+            bw_text = format_hz(bw_khz * 1e3)
+            q_text = f"{f0_khz / bw_khz:.0f}"
+        for key, text in (("bw", bw_text), ("q_factor", q_text)):
+            self.info_labels[key].setText(text)
+            self.info_labels[key].setToolTip(tooltip)
 
     # ---------------------------------------------------------------
     # Crosshair

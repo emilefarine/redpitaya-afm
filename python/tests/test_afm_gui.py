@@ -32,7 +32,9 @@ from test_afm_client import FakeSCPIServer, spectrum_response  # noqa: E402
 if HAVE_QT:
     from unittest import mock
 
-    from afm_client import AFMClient, OperatingMode, SpectrumData, SystemStatus
+    from afm_client import (
+        AFMClient, OperatingMode, SpectrumData, SystemStatus, sinc_amplitude_scale,
+    )
     from afm_gui import AFMMainWindow
     from afm_schematic import MockAFMClient, RoutingSchematicDialog, SchemNode
 
@@ -407,6 +409,42 @@ class GuiSmokeTests(unittest.TestCase):
         self.window._update_peak_info(spectrum)
         peak = self.window._find_peak_index(self.window._mag_display)
         self.assertLess(abs(self.window._freq_display[peak] - 150.0), 2.0)
+
+    def _show_result(self, freq, magnitude, mode="sweep", params=None):
+        self.window._last_measure_mode = mode
+        self.window._last_measure_params = params or {}
+        spectrum = SpectrumData(
+            freq_kHz=freq, magnitude=magnitude, phase_rad=np.zeros_like(freq))
+        self.window._update_plots(spectrum)
+        self.window._update_peak_info(spectrum)
+
+    def test_sinc_magnitude_reads_as_the_sine_amplitude(self):
+        params = {"center": 153.6, "bandwidth": 1.2, "samples": 65536, "decimation": 256,
+                  "amplitude": 0.5}
+        freq = np.linspace(153.0, 154.2, 161)
+        level = 0.25 / sinc_amplitude_scale(1.2, 65536, 256)
+        self._show_result(freq, np.full_like(freq, level), "sinc", params)
+        np.testing.assert_allclose(self.window._mag_display, 250.0)
+        self.assertEqual(self.window.info_labels["peak_mag"].text(), "250 mV")
+
+    def test_bandwidth_is_interpolated_between_points(self):
+        f0, q = 200.0, 500.0
+        freq = f0 + 0.07 * np.arange(-30, 31)
+        response, _ = self._resonance(freq, f0, q, 0.0)
+        self._show_result(freq, np.abs(response))
+        shown_q = float(self.window.info_labels["q_factor"].text())
+        self.assertLess(abs(shown_q / q - 1.0), 0.01)
+        self.assertEqual(self.window.info_labels["q_factor"].toolTip(), "")
+
+    def test_narrow_peak_shows_the_resolution_limit(self):
+        f0, q = 153.6, 20000.0
+        bin_khz = 125e3 / 256 / 65536
+        freq = f0 + bin_khz * np.arange(-80, 81)
+        response, _ = self._resonance(freq, f0, q, 0.0)
+        self._show_result(freq, np.abs(response), "sinc")
+        self.assertEqual(self.window.info_labels["bw"].text(), "< 22.4 Hz")
+        self.assertEqual(self.window.info_labels["q_factor"].text(), "> 6872")
+        self.assertIn("resolution", self.window.info_labels["q_factor"].toolTip())
 
     def test_empty_spectrum_does_not_crash(self):
         self.window._update_plots(SpectrumData())

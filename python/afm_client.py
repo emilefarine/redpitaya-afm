@@ -1032,6 +1032,16 @@ class AFMClient:
 
 # ------ Convenience Functions --------
 
+def sinc_amplitude_scale(bandwidth_khz: float, num_samples: int, decimation: int) -> float:
+    """Factor from a MEASURE:SINC magnitude to the amplitude a sine of the same setting gives.
+
+    The sinc spreads its amplitude A over the band as a rectangle of height A / 2B and the FFT
+    scales by 1/N, so a path of gain g reads g * A * fs / (2 B N) in each bin.
+    """
+    sample_rate_hz = AFMClient.ADC_SAMPLE_RATE_HZ / decimation
+    return 2.0 * bandwidth_khz * 1e3 * num_samples / sample_rate_hz
+
+
 def quick_connect(host: str, port: int = 5025) -> AFMClient:
     """
     Quick connect and initialize.
