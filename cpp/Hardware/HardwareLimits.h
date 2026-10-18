@@ -27,6 +27,10 @@ constexpr bool isValidDecimation(int decimation)
 // measure_ctrl uses delay_eff[17:0], so larger delays alias when truncated.
 static constexpr uint32_t MAX_DELAY_SAMPLES = (1u << 18) - 1;
 
+// Single BRAM: acquisition starts this many samples after generation (measure_ctrl
+// runs a requested 0 as 1), so acquired sample i answers generated sample i + 1.
+static constexpr uint32_t ACQUISITION_DELAY_SAMPLES = 1;
+
 constexpr bool isValidSampleCount(size_t numSamples)
 {
   return numSamples <= MAX_SAMPLES;

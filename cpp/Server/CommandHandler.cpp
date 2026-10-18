@@ -12,6 +12,7 @@
 #include "../Hardware/BoardProtocol.h"
 #include "../Hardware/HardwareLimits.h"
 #include "MathConstants.h"
+#include "SineFit.h"
 
 #include <algorithm>
 #include <chrono>
@@ -29,6 +30,11 @@ namespace
 
 // Covers the rounding of a float step in the sweep point count
 constexpr double c_SweepStepTolerance = 1.0e-6;
+
+double wrapPhase(double phaseRad)
+{
+  return std::remainder(phaseRad, 2.0 * c_Pi);
+}
 
 class ScopedMeasurement
 {
@@ -719,8 +725,9 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to load signal to FPGA");
   }
 
+  const uint32_t delay = HardwareLimits::ACQUISITION_DELAY_SAMPLES;
   ScopedMeasurement measurement(m_status, *m_hardware);
-  if (!m_hardware->startMeasurement(static_cast<uint32_t>(numSamples), 0))
+  if (!m_hardware->startMeasurement(static_cast<uint32_t>(numSamples), delay))
   {
     return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to start measurement");
   }
@@ -761,7 +768,12 @@ std::string CommandHandler::_handleMeasSinc(const ParsedCommand& cmd)
   {
     if (freqAxis[i] >= lowFreq && freqAxis[i] <= highFreq)
     {
-      spectrum.push_back({static_cast<float>(freqAxis[i] / 1000.0), magnitude[i], phase[i]});
+      // The pulse sits at sample N/2 - delay of the record: remove its linear phase
+      const double bin = static_cast<double>(i);
+      const double phaseRad =
+          phase[i] + c_Pi * bin - 2.0 * c_Pi * bin * delay / static_cast<double>(numSamples);
+      spectrum.push_back({static_cast<float>(freqAxis[i] / 1000.0), magnitude[i],
+                          static_cast<float>(wrapPhase(phaseRad))});
     }
   }
 
@@ -873,6 +885,7 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
 
   // Use a fixed number of samples for each single-frequency measurement
   const uint32_t sweepSamples = 8192;
+  const uint32_t delay = HardwareLimits::ACQUISITION_DELAY_SAMPLES;
   ScopedMeasurement measurement(m_status, *m_hardware);
 
   std::vector<SpectrumPoint> spectrum;
@@ -898,7 +911,7 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
                                 "Failed to load signal at " + std::to_string(freqKHz) + " kHz");
     }
 
-    if (!m_hardware->startMeasurement(sweepSamples, 0))
+    if (!m_hardware->startMeasurement(sweepSamples, delay))
     {
       return buildErrorResponse(ResponseStatus::ERR_HARDWARE, "Failed to start measurement at " +
                                                                   std::to_string(freqKHz) + " kHz");
@@ -925,23 +938,13 @@ std::string CommandHandler::_handleMeasSweep(const ParsedCommand& cmd)
     m_status.adcSaturationRatio =
         std::max(m_status.adcSaturationRatio, saturation.saturatedRatio);
 
-    // Compute amplitude and phase via sin/cos correlation
-    double omega = 2.0 * c_Pi * freqHz / samplingFreq;
-    double sumSin = 0.0;
-    double sumCos = 0.0;
+    // The last `delay` samples come after the excitation ended
+    const double omega = 2.0 * c_Pi * freqHz / samplingFreq;
+    SineFit::Result fit = SineFit::fit(acquired, sweepSamples - delay, omega);
 
-    for (uint32_t i = 0; i < sweepSamples; ++i)
-    {
-      double t = static_cast<double>(i);
-      sumSin += acquired[i] * std::sin(omega * t);
-      sumCos += acquired[i] * std::cos(omega * t);
-    }
-    sumSin *= 2.0 / sweepSamples;
-    sumCos *= 2.0 / sweepSamples;
-
-    float magnitude = static_cast<float>(std::sqrt(sumSin * sumSin + sumCos * sumCos));
+    float magnitude = static_cast<float>(fit.amplitude);
     // Phase of the response relative to the sine excitation (negative = lag)
-    float phaseRad = static_cast<float>(std::atan2(sumCos, sumSin));
+    float phaseRad = static_cast<float>(wrapPhase(fit.phaseRad - omega * delay));
 
     spectrum.push_back({static_cast<float>(freqKHz), magnitude, phaseRad});
 

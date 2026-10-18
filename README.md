@@ -241,8 +241,11 @@ except `MEASURE:*` and `BOARD:STATUS?` (below). Extra arguments are refused with
 header line, so a client can read it in one shot instead of scanning for newlines.
 
 `MEASURE:SWEEP` skips the points at or below 0 Hz when `center - range/2` is negative.
-For `MEASURE:SWEEP`, `phase_rad` is the phase of the response relative to the excitation
-(negative = lag). For `MEASURE:SINC` it is the FFT phase of the acquired record.
+`phase_rad` is the phase of the response relative to the excitation (negative = lag): for
+`MEASURE:SWEEP` relative to the sine, for `MEASURE:SINC` relative to the sinc pulse. Both
+account for the one-sample delay between generation and acquisition, so a direct cable
+reads about 0 with a small lag from the cable and converters. The sweep fits a sine with an
+offset, so a DC offset on the input does not leak into the low-frequency points.
 
 `BOARD:STATUS?` returns `OK LINES <N>` followed by the `N` lines of the board status block.
 
