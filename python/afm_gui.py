@@ -10,8 +10,9 @@ from PyQt6.QtWidgets import (
     QGridLayout, QGroupBox, QLabel, QLineEdit, QPushButton, QComboBox,
     QRadioButton, QButtonGroup, QSplitter, QStatusBar, QFileDialog,
     QMessageBox, QSpinBox, QDoubleSpinBox, QFrame, QSizePolicy, QCheckBox, QScrollArea,
+    QStyle, QStyleOptionGroupBox, QToolTip,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSettings, QEvent
 from PyQt6.QtGui import QFont, QColor, QPainter, QIcon
 
 import pyqtgraph as pg
@@ -57,6 +58,11 @@ MIN_RESOLVED_STEPS = 3
 # the window
 INFO_VALUE_SAMPLE = "-000.000 MHz"
 
+SETTINGS_BOARD_EXPANDED = "board_panel_expanded"
+
+# Gap between side-by-side widgets in the sidebar panels
+PANEL_COLUMN_SPACING = 6
+
 
 def format_hz(hz: float) -> str:
     if hz >= 1e6:
@@ -88,7 +94,8 @@ QGroupBox::title {{
     padding: 0 6px;
     color: {ACCENT_HOVER};
 }}
-QLabel {{
+QLabel, QCheckBox {{
+    background: transparent;
     color: {TEXT};
     font-size: 12px;
 }}
@@ -141,6 +148,7 @@ QPushButton#dangerBtn:hover {{
     background-color: #dc2626;
 }}
 QRadioButton {{
+    background: transparent;
     color: {TEXT};
     spacing: 6px;
     font-size: 12px;
@@ -192,6 +200,65 @@ class LEDIndicator(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(2, 2, self._size, self._size)
         p.end()
+
+
+# ---------------------------------------------------------------------------
+# Group box that folds when its title is clicked
+# ---------------------------------------------------------------------------
+class CollapsibleGroupBox(QGroupBox):
+    expanded_changed = pyqtSignal(bool)
+
+    def __init__(self, title: str, body: QWidget, parent=None):
+        super().__init__(parent)
+        self._title = title
+        self.body = body
+        body.setObjectName("collapsibleBody")
+        body.setStyleSheet("#collapsibleBody { background: transparent; }")
+        self._layout = QVBoxLayout(self)
+        self._layout.addWidget(body)
+        self.setMouseTracking(True)
+        self.set_expanded(True)
+
+    def is_expanded(self) -> bool:
+        return not self.body.isHidden()
+
+    def set_expanded(self, expanded: bool):
+        self.body.setVisible(expanded)
+        self.setTitle(f"{'▾' if expanded else '▸'} {self._title}")
+        # Folded: keep only the title and the top of the frame
+        if expanded:
+            self._layout.unsetContentsMargins()
+            self.setMaximumHeight(16777215)
+        else:
+            self._layout.setContentsMargins(0, 0, 0, 0)
+            self.setMaximumHeight(self.title_rect().bottom() + 6)
+        self.expanded_changed.emit(expanded)
+
+    def title_rect(self):
+        option = QStyleOptionGroupBox()
+        self.initStyleOption(option)
+        return self.style().subControlRect(
+            QStyle.ComplexControl.CC_GroupBox, option, QStyle.SubControl.SC_GroupBoxLabel, self)
+
+    def mousePressEvent(self, event):
+        if (event.button() == Qt.MouseButton.LeftButton
+                and self.title_rect().contains(event.position().toPoint())):
+            self.set_expanded(not self.is_expanded())
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.title_rect().contains(event.position().toPoint()):
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.unsetCursor()
+        super().mouseMoveEvent(event)
+
+    def event(self, event):
+        if event.type() == QEvent.Type.ToolTip and self.title_rect().contains(event.pos()):
+            QToolTip.showText(event.globalPos(), "Click to hide or show", self)
+            return True
+        return super().event(event)
 
 
 # ---------------------------------------------------------------------------
@@ -292,9 +359,10 @@ class CommandWorker(QThread):
 # ---------------------------------------------------------------------------
 class AFMMainWindow(QMainWindow):
 
-    def __init__(self):
+    def __init__(self, settings: QSettings | None = None):
         super().__init__()
         self.setWindowTitle("AFM Measurement System")
+        self._settings = settings if settings is not None else QSettings("redpitaya-afm", "afm_gui")
         available = self.screen().availableGeometry()
         self.resize(min(1400, int(available.width() * 0.95)),
                     min(850, int(available.height() * 0.9)))
@@ -383,11 +451,20 @@ class AFMMainWindow(QMainWindow):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([310, 1090])
 
+    @staticmethod
+    def _panel_grid(parent: QWidget, row_spacing: int) -> QGridLayout:
+        """Grid with equal label and field columns, so the fields line up across panels."""
+        layout = QGridLayout(parent)
+        layout.setHorizontalSpacing(PANEL_COLUMN_SPACING)
+        layout.setVerticalSpacing(row_spacing)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
+        return layout
+
     # --- Connection panel ---
     def _build_connection_panel(self) -> QGroupBox:
         grp = QGroupBox("Connection")
-        layout = QGridLayout(grp)
-        layout.setSpacing(6)
+        layout = self._panel_grid(grp, 6)
 
         layout.addWidget(QLabel("IP Address"), 0, 0)
         self.ip_edit = QLineEdit("192.168.1.100")
@@ -401,6 +478,7 @@ class AFMMainWindow(QMainWindow):
         layout.addWidget(self.port_spin, 1, 1)
 
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(PANEL_COLUMN_SPACING)
         self.connect_btn = QPushButton("Connect")
         self.connect_btn.clicked.connect(self._on_connect)
         btn_row.addWidget(self.connect_btn)
@@ -419,8 +497,7 @@ class AFMMainWindow(QMainWindow):
     # --- Status panel ---
     def _build_status_panel(self) -> QGroupBox:
         grp = QGroupBox("System Status")
-        layout = QGridLayout(grp)
-        layout.setSpacing(4)
+        layout = self._panel_grid(grp, 4)
 
         labels = ["HW Initialized", "Board Connected", "Decimation"]
         self.status_values: list[QLabel] = []
@@ -442,6 +519,7 @@ class AFMMainWindow(QMainWindow):
         layout.addWidget(self.adc_status_label, adc_row, 1)
 
         status_btns = QHBoxLayout()
+        status_btns.setSpacing(PANEL_COLUMN_SPACING)
         self.init_hw_btn = QPushButton("Init HW")
         self.init_hw_btn.clicked.connect(self._on_init_hw)
         status_btns.addWidget(self.init_hw_btn)
@@ -456,10 +534,11 @@ class AFMMainWindow(QMainWindow):
 
     # --- Board panel ---
     def _build_board_panel(self) -> QGroupBox:
-        grp = QGroupBox("Board Configuration")
-        self.board_panel = grp
-        layout = QGridLayout(grp)
-        layout.setSpacing(4)
+        # The controls are disabled without a board; the title stays clickable
+        body = QWidget()
+        self.board_panel = body
+        layout = self._panel_grid(body, 4)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         # MUX
         layout.addWidget(QLabel("MUX Output"), 0, 0)
@@ -473,6 +552,7 @@ class AFMMainWindow(QMainWindow):
         layout.addWidget(self.mux_in, 1, 1)
 
         mux_btns = QHBoxLayout()
+        mux_btns.setSpacing(PANEL_COLUMN_SPACING)
         self.mux_set_btn = QPushButton("Set Route")
         self.mux_set_btn.clicked.connect(self._on_mux_set)
         mux_btns.addWidget(self.mux_set_btn)
@@ -506,6 +586,7 @@ class AFMMainWindow(QMainWindow):
 
         # Board reset / status
         board_btns = QHBoxLayout()
+        board_btns.setSpacing(PANEL_COLUMN_SPACING)
         self.board_status_btn = QPushButton("Board Status")
         self.board_status_btn.clicked.connect(self._on_board_status)
         board_btns.addWidget(self.board_status_btn)
@@ -538,16 +619,21 @@ class AFMMainWindow(QMainWindow):
         self.sample_gain_spin.editingFinished.connect(self._on_sample_gain_edited)
         layout.addWidget(self.sample_gain_spin, 10, 1)
 
-        return grp
+        box = CollapsibleGroupBox("Board Configuration", body)
+        box.set_expanded(self._settings.value(SETTINGS_BOARD_EXPANDED, True, type=bool))
+        box.expanded_changed.connect(
+            lambda expanded: self._settings.setValue(SETTINGS_BOARD_EXPANDED, expanded))
+        self.board_box = box
+        return box
 
     # --- Measurement panel ---
     def _build_measurement_panel(self) -> QGroupBox:
         grp = QGroupBox("Measurement")
-        layout = QGridLayout(grp)
-        layout.setSpacing(4)
+        layout = self._panel_grid(grp, 4)
 
         # Mode radio buttons
         mode_row = QHBoxLayout()
+        mode_row.setSpacing(PANEL_COLUMN_SPACING)
         self.mode_group = QButtonGroup(self)
         self.radio_sinc = QRadioButton("Sinc (broadband)")
         self.radio_sweep = QRadioButton("Sweep")

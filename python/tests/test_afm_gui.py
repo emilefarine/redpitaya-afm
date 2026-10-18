@@ -7,6 +7,7 @@ PyQt6/pyqtgraph are not installed, so the base test run only needs numpy.
 
 import os
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -32,6 +33,9 @@ from test_afm_client import FakeSCPIServer, spectrum_response  # noqa: E402
 if HAVE_QT:
     from unittest import mock
 
+    from PyQt6.QtCore import QSettings, Qt
+    from PyQt6.QtTest import QTest
+
     from afm_client import (
         AFMClient, OperatingMode, SpectrumData, SystemStatus, sinc_amplitude_scale,
     )
@@ -47,7 +51,13 @@ class GuiSmokeTests(unittest.TestCase):
 
     def setUp(self):
         self.servers = []
-        self.window = AFMMainWindow()
+        settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(settings_dir.cleanup)
+        self.settings_path = os.path.join(settings_dir.name, "afm_gui.ini")
+        self.window = AFMMainWindow(self.make_settings())
+
+    def make_settings(self):
+        return QSettings(self.settings_path, QSettings.Format.IniFormat)
 
     def tearDown(self):
         self.window.close()
@@ -659,6 +669,44 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(self.window.height(), 500)
         panel = self.window.board_panel
         self.assertGreaterEqual(panel.height(), panel.minimumSizeHint().height())
+
+    def click_board_title(self, window):
+        box = window.board_box
+        QTest.mouseClick(box, Qt.MouseButton.LeftButton, pos=box.title_rect().center())
+
+    def test_board_panel_folds_from_its_title_without_a_board(self):
+        self.assertFalse(self.window.board_panel.isEnabled())
+        sidebar = self.window.sidebar_scroll.widget()
+        expanded_height = sidebar.minimumSizeHint().height()
+
+        self.click_board_title(self.window)
+        self.assertFalse(self.window.board_box.is_expanded())
+        self.assertLess(sidebar.minimumSizeHint().height(),
+                        expanded_height - self.window.board_panel.minimumSizeHint().height())
+
+        self.click_board_title(self.window)
+        self.assertTrue(self.window.board_box.is_expanded())
+        self.assertTrue(self.window.board_panel.isVisibleTo(self.window))
+
+    def test_board_panel_fold_is_remembered(self):
+        self.click_board_title(self.window)
+        self.window._settings.sync()
+        reopened = AFMMainWindow(self.make_settings())
+        self.addCleanup(reopened.close)
+        self.assertFalse(reopened.board_box.is_expanded())
+
+    def test_panel_fields_line_up(self):
+        # Room for the wide offscreen font, so no panel is squeezed below its minimum
+        self.window.sidebar_scroll.setMaximumWidth(1000)
+        self.window.resize(2000, 900)
+        self.window.show()
+        self.window.sidebar_scroll.parentWidget().setSizes([800, 1200])
+        QApplication.processEvents()
+        lefts = {self.window.ip_edit.mapTo(self.window, self.window.ip_edit.rect().topLeft()).x(),
+                 self.window.mux_out.mapTo(self.window, self.window.mux_out.rect().topLeft()).x(),
+                 self.window.center_spin.mapTo(
+                     self.window, self.window.center_spin.rect().topLeft()).x()}
+        self.assertEqual(len(lefts), 1, lefts)
 
     def test_results_do_not_widen_the_window(self):
         self.window.show()

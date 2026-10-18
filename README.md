@@ -158,6 +158,10 @@ than 3 frequency steps, it is the resolution and not the resonance: the GUI then
 (for example `< 22.4 Hz` and `> 6872`). Use more samples, a higher decimation or a finer
 step to resolve it.
 
+Click the "Board Configuration" title to fold that panel and keep the measurement controls
+in view on a small screen; the GUI remembers the choice. The sidebar scrolls when the screen
+is too short.
+
 The GUI has an "Open Routing Schematic" button showing the live 4x4 crossbar
 routing and PGA gains (read from `BOARD:STATUS?`); the same dialog runs
 standalone without hardware for preview:
