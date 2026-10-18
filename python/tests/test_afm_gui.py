@@ -361,14 +361,19 @@ class GuiSmokeTests(unittest.TestCase):
     def test_sinc_phase_removes_delay_and_keeps_the_step(self):
         freq = np.linspace(150.0, 250.0, 419)
         response, phase = self._resonance(freq, 200.0, 400.0, 20e-6)
-        phase = phase.copy()
-        phase[::2] += np.pi  # the alternation of a centred sinc pulse
         shown = self._displayed_phase(freq, np.abs(response), phase, mode="sinc")
 
         true_deg = np.degrees(np.unwrap(np.angle(response)))
         peak = int(np.argmax(np.abs(response)))
         error = np.abs((shown - shown[peak]) - (true_deg - true_deg[peak]))
         self.assertLess(error.max(), 6.0)
+
+    def test_sinc_phase_is_shown_as_received(self):
+        freq = np.linspace(150.0, 250.0, 419)
+        phase = np.full_like(freq, 0.3)
+        self.window.remove_delay_check.setChecked(False)
+        shown = self._displayed_phase(freq, np.ones_like(freq), phase, mode="sinc")
+        np.testing.assert_allclose(shown, np.degrees(phase), atol=1e-6)
 
     def test_flat_response_delay_is_removed(self):
         freq = np.linspace(150.0, 250.0, 201)
