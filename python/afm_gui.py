@@ -1275,12 +1275,7 @@ class AFMMainWindow(QMainWindow):
             return (values + 180.0) % 360.0 - 180.0
 
         is_sinc = self._last_measure_mode == "sinc"
-        phase_deg = np.degrees(phase_rad)
-        if is_sinc and phase_deg.size > 1:
-            # Sinc pulse centred in the record: 180 deg alternation between FFT bins
-            phase_deg[::2] -= 180.0
-
-        phase_deg = _wrap_deg(phase_deg)
+        phase_deg = _wrap_deg(np.degrees(phase_rad))
         if phase_deg.size > 1:
             phase_deg = np.degrees(np.unwrap(np.deg2rad(phase_deg)))
             if self.remove_delay_check.isChecked():
