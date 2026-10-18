@@ -1,4 +1,5 @@
 #include "CommandHandler.h"
+#include "HardwareLimits.h"
 #include "MathConstants.h"
 #include "Protocol.h"
 
@@ -157,17 +158,40 @@ protected:
     return rows;
   }
 
-  // Acquisition returns amplitude * sin(2 pi f t + phase) at the decimated rate
-  void respondWithSine(double freqHz, double amplitude, double phaseRad, uint16_t decimation = 64)
+  // Response amplitude * sin(2 pi f t + phase) + offset to an excitation sin(2 pi f t),
+  // acquired like the FPGA does: sample i answers generated sample i + delay
+  void respondWithSine(double freqHz, double amplitude, double phaseRad, uint16_t decimation = 64,
+                       double offset = 0.0)
   {
     const double samplingFreq = 125000000.0 / decimation;
+    const double delay = HardwareLimits::ACQUISITION_DELAY_SAMPLES;
     ON_CALL(*m_rawHw, getAcquiredSignal(_))
         .WillByDefault(WithArg<0>(Invoke([=](std::vector<float>& s) {
           for (size_t i = 0; i < s.size(); ++i)
           {
+            const double t = static_cast<double>(i) + delay;
             s[i] = static_cast<float>(
-                amplitude * sin(2.0 * c_Pi * freqHz * static_cast<double>(i) / samplingFreq +
-                                phaseRad));
+                amplitude * sin(2.0 * c_Pi * freqHz * t / samplingFreq + phaseRad) + offset);
+          }
+          return true;
+        })));
+  }
+
+  // Ideal loop: the acquisition returns the generated signal, delayed like the FPGA does
+  void respondWithLoopback()
+  {
+    auto loaded = std::make_shared<std::vector<float>>();
+    ON_CALL(*m_rawHw, loadGenerationSignal(_))
+        .WillByDefault(Invoke([loaded](const std::vector<float>& signal) {
+          *loaded = signal;
+          return true;
+        }));
+    ON_CALL(*m_rawHw, getAcquiredSignal(_))
+        .WillByDefault(WithArg<0>(Invoke([loaded](std::vector<float>& s) {
+          const size_t delay = HardwareLimits::ACQUISITION_DELAY_SAMPLES;
+          for (size_t i = 0; i < s.size(); ++i)
+          {
+            s[i] = (i + delay < loaded->size()) ? (*loaded)[i + delay] : 0.0f;
           }
           return true;
         })));
@@ -559,7 +583,8 @@ TEST_F(CommandHandlerTest, MeasSincHappyPathReturnsConsistentSpectrum)
 
   EXPECT_CALL(*m_rawHw, setDecimation(64)).WillOnce(Return(true));
   EXPECT_CALL(*m_rawHw, loadGenerationSignal(SizeIs(8192u))).WillOnce(Return(true));
-  EXPECT_CALL(*m_rawHw, startMeasurement(8192u, 0u)).WillOnce(Return(true));
+  EXPECT_CALL(*m_rawHw, startMeasurement(8192u, HardwareLimits::ACQUISITION_DELAY_SAMPLES))
+      .WillOnce(Return(true));
 
   std::string resp = send("MEASURE:SINC 200,100");
   ASSERT_EQ(resp.compare(0, 3, "OK "), 0) << resp;
@@ -867,26 +892,53 @@ TEST_F(CommandHandlerTest, SweepLoopbackGivesZeroPhaseAndExcitationAmplitude)
   initHardware(true);
   primeSuccessfulMeasurement(8192);
 
-  // Acquisition = the generated signal: unit gain, no phase shift
-  auto loaded = std::make_shared<std::vector<float>>();
-  ON_CALL(*m_rawHw, loadGenerationSignal(_))
-      .WillByDefault(Invoke([loaded](const std::vector<float>& signal) {
-        *loaded = signal;
-        return true;
-      }));
-  ON_CALL(*m_rawHw, getAcquiredSignal(_))
-      .WillByDefault(WithArg<0>(Invoke([loaded](std::vector<float>& s) {
-        std::copy_n(loaded->begin(), std::min(s.size(), loaded->size()), s.begin());
-        return true;
-      })));
+  respondWithLoopback();
 
   auto rows = parseSpectrum(send("MEASURE:SWEEP 200,10,1,64,0.8"));
   ASSERT_EQ(rows.size(), 11u);
   for (const auto& row : rows)
   {
-    EXPECT_NEAR(row.magnitude, 0.8, 1e-2) << row.freqKHz;
-    EXPECT_NEAR(row.phaseRad, 0.0, 1e-2) << row.freqKHz;
+    EXPECT_NEAR(row.magnitude, 0.8, 1e-3) << row.freqKHz;
+    EXPECT_NEAR(row.phaseRad, 0.0, 1e-3) << row.freqKHz;
   }
+}
+
+TEST_F(CommandHandlerTest, SweepIgnoresInputOffset)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+
+  // One point at 1.25 kHz, decimation 64: 5.24 periods in the window, offset -0.34
+  respondWithSine(1250.0, 0.25, -c_Pi / 4.0, 64, -0.34);
+  auto rows = parseSpectrum(send("MEASURE:SWEEP 1.5,0.5,1,64,0.25"));
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_NEAR(rows[0].magnitude, 0.25, 1e-4);
+  EXPECT_NEAR(rows[0].phaseRad, -c_Pi / 4.0, 1e-3);
+}
+
+TEST_F(CommandHandlerTest, SincLoopbackGivesZeroPhaseInBand)
+{
+  initHardware(true);
+  primeSuccessfulMeasurement(8192);
+  respondWithLoopback();
+
+  auto rows = parseSpectrum(send("MEASURE:SINC 200,100,8192,64,0.5"));
+  ASSERT_FALSE(rows.empty());
+  double peak = 0.0;
+  for (const auto& row : rows)
+  {
+    peak = std::max(peak, row.magnitude);
+  }
+  size_t checked = 0;
+  for (const auto& row : rows)
+  {
+    if (row.magnitude > 0.5 * peak)
+    {
+      EXPECT_NEAR(row.phaseRad, 0.0, 1e-2) << row.freqKHz;
+      ++checked;
+    }
+  }
+  EXPECT_GT(checked, rows.size() / 2);
 }
 
 TEST_F(CommandHandlerTest, SweepSinglePointSucceeds)

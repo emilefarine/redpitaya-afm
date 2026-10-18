@@ -432,7 +432,7 @@ inline std::string buildTextResponse(const std::string& text)
 struct VersionInfo
 {
   static constexpr int MAJOR = 2;
-  static constexpr int MINOR = 10;
+  static constexpr int MINOR = 11;
   static constexpr int PATCH = 0;
 
   static std::string toString()
