@@ -7,6 +7,7 @@ PyQt6/pyqtgraph are not installed, so the base test run only needs numpy.
 
 import os
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -32,7 +33,12 @@ from test_afm_client import FakeSCPIServer, spectrum_response  # noqa: E402
 if HAVE_QT:
     from unittest import mock
 
-    from afm_client import AFMClient, OperatingMode, SpectrumData, SystemStatus
+    from PyQt6.QtCore import QSettings, Qt
+    from PyQt6.QtTest import QTest
+
+    from afm_client import (
+        AFMClient, OperatingMode, SpectrumData, SystemStatus, sinc_amplitude_scale,
+    )
     from afm_gui import AFMMainWindow
     from afm_schematic import MockAFMClient, RoutingSchematicDialog, SchemNode
 
@@ -45,7 +51,13 @@ class GuiSmokeTests(unittest.TestCase):
 
     def setUp(self):
         self.servers = []
-        self.window = AFMMainWindow()
+        settings_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(settings_dir.cleanup)
+        self.settings_path = os.path.join(settings_dir.name, "afm_gui.ini")
+        self.window = AFMMainWindow(self.make_settings())
+
+    def make_settings(self):
+        return QSettings(self.settings_path, QSettings.Format.IniFormat)
 
     def tearDown(self):
         self.window.close()
@@ -408,6 +420,42 @@ class GuiSmokeTests(unittest.TestCase):
         peak = self.window._find_peak_index(self.window._mag_display)
         self.assertLess(abs(self.window._freq_display[peak] - 150.0), 2.0)
 
+    def _show_result(self, freq, magnitude, mode="sweep", params=None):
+        self.window._last_measure_mode = mode
+        self.window._last_measure_params = params or {}
+        spectrum = SpectrumData(
+            freq_kHz=freq, magnitude=magnitude, phase_rad=np.zeros_like(freq))
+        self.window._update_plots(spectrum)
+        self.window._update_peak_info(spectrum)
+
+    def test_sinc_magnitude_reads_as_the_sine_amplitude(self):
+        params = {"center": 153.6, "bandwidth": 1.2, "samples": 65536, "decimation": 256,
+                  "amplitude": 0.5}
+        freq = np.linspace(153.0, 154.2, 161)
+        level = 0.25 / sinc_amplitude_scale(1.2, 65536, 256)
+        self._show_result(freq, np.full_like(freq, level), "sinc", params)
+        np.testing.assert_allclose(self.window._mag_display, 250.0)
+        self.assertEqual(self.window.info_labels["peak_mag"].text(), "250 mV")
+
+    def test_bandwidth_is_interpolated_between_points(self):
+        f0, q = 200.0, 500.0
+        freq = f0 + 0.07 * np.arange(-30, 31)
+        response, _ = self._resonance(freq, f0, q, 0.0)
+        self._show_result(freq, np.abs(response))
+        shown_q = float(self.window.info_labels["q_factor"].text())
+        self.assertLess(abs(shown_q / q - 1.0), 0.01)
+        self.assertEqual(self.window.info_labels["q_factor"].toolTip(), "")
+
+    def test_narrow_peak_shows_the_resolution_limit(self):
+        f0, q = 153.6, 20000.0
+        bin_khz = 125e3 / 256 / 65536
+        freq = f0 + bin_khz * np.arange(-80, 81)
+        response, _ = self._resonance(freq, f0, q, 0.0)
+        self._show_result(freq, np.abs(response), "sinc")
+        self.assertEqual(self.window.info_labels["bw"].text(), "< 22.4 Hz")
+        self.assertEqual(self.window.info_labels["q_factor"].text(), "> 6872")
+        self.assertIn("resolution", self.window.info_labels["q_factor"].toolTip())
+
     def test_empty_spectrum_does_not_crash(self):
         self.window._update_plots(SpectrumData())
         self.window._update_peak_info(SpectrumData())
@@ -607,6 +655,72 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(decimations, list(DECIMATIONS))
         self.assertEqual(self.window.dec_combo.currentData(), 64)
         self.assertEqual(self.window.gain_val.count(), len(GAIN_LABELS))
+
+    def test_sidebar_scrolls_instead_of_setting_the_window_height(self):
+        sidebar = self.window.sidebar_scroll.widget()
+        height = self.window.minimumSizeHint().height()
+        self.assertLess(height, sidebar.minimumSizeHint().height())
+        self.assertLess(height, 600)
+
+    def test_board_panel_keeps_its_height_in_a_short_window(self):
+        self.window.show()
+        self.window.resize(1000, 500)
+        QApplication.processEvents()
+        self.assertEqual(self.window.height(), 500)
+        panel = self.window.board_panel
+        self.assertGreaterEqual(panel.height(), panel.minimumSizeHint().height())
+
+    def click_board_title(self, window):
+        box = window.board_box
+        QTest.mouseClick(box, Qt.MouseButton.LeftButton, pos=box.title_rect().center())
+
+    def test_board_panel_folds_from_its_title_without_a_board(self):
+        self.assertFalse(self.window.board_panel.isEnabled())
+        sidebar = self.window.sidebar_scroll.widget()
+        expanded_height = sidebar.minimumSizeHint().height()
+
+        self.click_board_title(self.window)
+        self.assertFalse(self.window.board_box.is_expanded())
+        self.assertLess(sidebar.minimumSizeHint().height(),
+                        expanded_height - self.window.board_panel.minimumSizeHint().height())
+
+        self.click_board_title(self.window)
+        self.assertTrue(self.window.board_box.is_expanded())
+        self.assertTrue(self.window.board_panel.isVisibleTo(self.window))
+
+    def test_board_panel_fold_is_remembered(self):
+        self.click_board_title(self.window)
+        self.window._settings.sync()
+        reopened = AFMMainWindow(self.make_settings())
+        self.addCleanup(reopened.close)
+        self.assertFalse(reopened.board_box.is_expanded())
+
+    def test_panel_fields_line_up(self):
+        # Room for the wide offscreen font, so no panel is squeezed below its minimum
+        self.window.sidebar_scroll.setMaximumWidth(1000)
+        self.window.resize(2000, 900)
+        self.window.show()
+        self.window.sidebar_scroll.parentWidget().setSizes([800, 1200])
+        QApplication.processEvents()
+        lefts = {self.window.ip_edit.mapTo(self.window, self.window.ip_edit.rect().topLeft()).x(),
+                 self.window.mux_out.mapTo(self.window, self.window.mux_out.rect().topLeft()).x(),
+                 self.window.center_spin.mapTo(
+                     self.window, self.window.center_spin.rect().topLeft()).x()}
+        self.assertEqual(len(lefts), 1, lefts)
+
+    def test_results_do_not_widen_the_window(self):
+        self.window.show()
+        QApplication.processEvents()
+        sidebar = self.window.sidebar_scroll.widget()
+        info_panel = self.window.info_labels["peak_mag"].parentWidget()
+        before = (sidebar.minimumSizeHint().width(), info_panel.minimumSizeHint().width())
+        self.window._update_adc_indicator(SystemStatus(
+            adc_saturated=True, adc_overdrive=True, adc_protect=False, adc_loop="1,1"))
+        for label in self.window.info_labels.values():
+            label.setText("2.9417e+02 uV")
+        QApplication.processEvents()
+        after = (sidebar.minimumSizeHint().width(), info_panel.minimumSizeHint().width())
+        self.assertEqual(after, before)
 
 
 if __name__ == "__main__":

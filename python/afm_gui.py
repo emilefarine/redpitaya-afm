@@ -9,15 +9,17 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QGroupBox, QLabel, QLineEdit, QPushButton, QComboBox,
     QRadioButton, QButtonGroup, QSplitter, QStatusBar, QFileDialog,
-    QMessageBox, QSpinBox, QDoubleSpinBox, QFrame, QSizePolicy, QCheckBox,
+    QMessageBox, QSpinBox, QDoubleSpinBox, QFrame, QSizePolicy, QCheckBox, QScrollArea,
+    QStyle, QStyleOptionGroupBox, QToolTip,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSettings, QEvent
 from PyQt6.QtGui import QFont, QColor, QPainter, QIcon
 
 import pyqtgraph as pg
 
 from afm_client import (
     AFMClient, AFMError, AFMBusyError, SpectrumData, OperatingMode, GAIN_LABELS, DECIMATIONS,
+    sinc_amplitude_scale,
 )
 from afm_schematic import RoutingSchematicDialog
 
@@ -49,6 +51,27 @@ PEAK_EDGE_MARGIN_FRAC = 0.02
 DELAY_FIT_EXCLUDE_BW = 3
 DELAY_FIT_MIN_POINTS = 3
 
+# A -3 dB band narrower than this many frequency steps shows the resolution, not the resonance
+MIN_RESOLVED_STEPS = 3
+
+# Widest expected result text: the result labels keep this width so a result never resizes
+# the window
+INFO_VALUE_SAMPLE = "-000.000 MHz"
+
+SETTINGS_BOARD_EXPANDED = "board_panel_expanded"
+
+# Gap between side-by-side widgets in the sidebar panels
+PANEL_COLUMN_SPACING = 6
+
+
+def format_hz(hz: float) -> str:
+    if hz >= 1e6:
+        return f"{hz / 1e6:.3f} MHz"
+    if hz >= 1e3:
+        return f"{hz / 1e3:.3f} kHz"
+    return f"{hz:.1f} Hz"
+
+
 STYLESHEET = f"""
 QMainWindow, QWidget {{
     background-color: {DARK_BG};
@@ -71,7 +94,8 @@ QGroupBox::title {{
     padding: 0 6px;
     color: {ACCENT_HOVER};
 }}
-QLabel {{
+QLabel, QCheckBox {{
+    background: transparent;
     color: {TEXT};
     font-size: 12px;
 }}
@@ -124,6 +148,7 @@ QPushButton#dangerBtn:hover {{
     background-color: #dc2626;
 }}
 QRadioButton {{
+    background: transparent;
     color: {TEXT};
     spacing: 6px;
     font-size: 12px;
@@ -175,6 +200,65 @@ class LEDIndicator(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(2, 2, self._size, self._size)
         p.end()
+
+
+# ---------------------------------------------------------------------------
+# Group box that folds when its title is clicked
+# ---------------------------------------------------------------------------
+class CollapsibleGroupBox(QGroupBox):
+    expanded_changed = pyqtSignal(bool)
+
+    def __init__(self, title: str, body: QWidget, parent=None):
+        super().__init__(parent)
+        self._title = title
+        self.body = body
+        body.setObjectName("collapsibleBody")
+        body.setStyleSheet("#collapsibleBody { background: transparent; }")
+        self._layout = QVBoxLayout(self)
+        self._layout.addWidget(body)
+        self.setMouseTracking(True)
+        self.set_expanded(True)
+
+    def is_expanded(self) -> bool:
+        return not self.body.isHidden()
+
+    def set_expanded(self, expanded: bool):
+        self.body.setVisible(expanded)
+        self.setTitle(f"{'▾' if expanded else '▸'} {self._title}")
+        # Folded: keep only the title and the top of the frame
+        if expanded:
+            self._layout.unsetContentsMargins()
+            self.setMaximumHeight(16777215)
+        else:
+            self._layout.setContentsMargins(0, 0, 0, 0)
+            self.setMaximumHeight(self.title_rect().bottom() + 6)
+        self.expanded_changed.emit(expanded)
+
+    def title_rect(self):
+        option = QStyleOptionGroupBox()
+        self.initStyleOption(option)
+        return self.style().subControlRect(
+            QStyle.ComplexControl.CC_GroupBox, option, QStyle.SubControl.SC_GroupBoxLabel, self)
+
+    def mousePressEvent(self, event):
+        if (event.button() == Qt.MouseButton.LeftButton
+                and self.title_rect().contains(event.position().toPoint())):
+            self.set_expanded(not self.is_expanded())
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.title_rect().contains(event.position().toPoint()):
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.unsetCursor()
+        super().mouseMoveEvent(event)
+
+    def event(self, event):
+        if event.type() == QEvent.Type.ToolTip and self.title_rect().contains(event.pos()):
+            QToolTip.showText(event.globalPos(), "Click to hide or show", self)
+            return True
+        return super().event(event)
 
 
 # ---------------------------------------------------------------------------
@@ -275,10 +359,13 @@ class CommandWorker(QThread):
 # ---------------------------------------------------------------------------
 class AFMMainWindow(QMainWindow):
 
-    def __init__(self):
+    def __init__(self, settings: QSettings | None = None):
         super().__init__()
         self.setWindowTitle("AFM Measurement System")
-        self.resize(1400, 850)
+        self._settings = settings if settings is not None else QSettings("redpitaya-afm", "afm_gui")
+        available = self.screen().availableGeometry()
+        self.resize(min(1400, int(available.width() * 0.95)),
+                    min(850, int(available.height() * 0.9)))
 
         self.client = AFMClient("192.168.1.100", 5025)
         self._worker: MeasureWorker | None = None
@@ -293,6 +380,8 @@ class AFMMainWindow(QMainWindow):
         self._measure_time = 0.0
         self._last_measure_mode = "sinc"
         self._pending_measure_mode = "sinc"
+        self._last_measure_params: dict = {}
+        self._pending_measure_params: dict = {}
         self._closing = False
         self.board_available = False
         self._controls_enabled = False
@@ -324,7 +413,6 @@ class AFMMainWindow(QMainWindow):
 
         # --- Left sidebar ---
         sidebar = QWidget()
-        sidebar.setMaximumWidth(340)
         sidebar.setMinimumWidth(280)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
@@ -336,7 +424,18 @@ class AFMMainWindow(QMainWindow):
         sidebar_layout.addWidget(self._build_measurement_panel())
         sidebar_layout.addStretch()
 
-        splitter.addWidget(sidebar)
+        # Scrolls when the screen is shorter than the panels instead of squeezing them
+        sidebar_scroll = QScrollArea()
+        sidebar_scroll.setWidget(sidebar)
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scrollbar_width = sidebar_scroll.verticalScrollBar().sizeHint().width()
+        sidebar_scroll.setMinimumWidth(sidebar.minimumWidth() + scrollbar_width)
+        sidebar_scroll.setMaximumWidth(340 + scrollbar_width)
+        self.sidebar_scroll = sidebar_scroll
+
+        splitter.addWidget(sidebar_scroll)
 
         # --- Right plot area ---
         right = QWidget()
@@ -352,11 +451,20 @@ class AFMMainWindow(QMainWindow):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([310, 1090])
 
+    @staticmethod
+    def _panel_grid(parent: QWidget, row_spacing: int) -> QGridLayout:
+        """Grid with equal label and field columns, so the fields line up across panels."""
+        layout = QGridLayout(parent)
+        layout.setHorizontalSpacing(PANEL_COLUMN_SPACING)
+        layout.setVerticalSpacing(row_spacing)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
+        return layout
+
     # --- Connection panel ---
     def _build_connection_panel(self) -> QGroupBox:
         grp = QGroupBox("Connection")
-        layout = QGridLayout(grp)
-        layout.setSpacing(6)
+        layout = self._panel_grid(grp, 6)
 
         layout.addWidget(QLabel("IP Address"), 0, 0)
         self.ip_edit = QLineEdit("192.168.1.100")
@@ -370,6 +478,7 @@ class AFMMainWindow(QMainWindow):
         layout.addWidget(self.port_spin, 1, 1)
 
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(PANEL_COLUMN_SPACING)
         self.connect_btn = QPushButton("Connect")
         self.connect_btn.clicked.connect(self._on_connect)
         btn_row.addWidget(self.connect_btn)
@@ -388,8 +497,7 @@ class AFMMainWindow(QMainWindow):
     # --- Status panel ---
     def _build_status_panel(self) -> QGroupBox:
         grp = QGroupBox("System Status")
-        layout = QGridLayout(grp)
-        layout.setSpacing(4)
+        layout = self._panel_grid(grp, 4)
 
         labels = ["HW Initialized", "Board Connected", "Decimation"]
         self.status_values: list[QLabel] = []
@@ -407,9 +515,11 @@ class AFMMainWindow(QMainWindow):
         self.adc_status_label = QLabel("N/A")
         self.adc_status_label.setStyleSheet(f"color: {TEXT_DIM};")
         self.adc_status_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.adc_status_label.setWordWrap(True)
         layout.addWidget(self.adc_status_label, adc_row, 1)
 
         status_btns = QHBoxLayout()
+        status_btns.setSpacing(PANEL_COLUMN_SPACING)
         self.init_hw_btn = QPushButton("Init HW")
         self.init_hw_btn.clicked.connect(self._on_init_hw)
         status_btns.addWidget(self.init_hw_btn)
@@ -424,10 +534,11 @@ class AFMMainWindow(QMainWindow):
 
     # --- Board panel ---
     def _build_board_panel(self) -> QGroupBox:
-        grp = QGroupBox("Board Configuration")
-        self.board_panel = grp
-        layout = QGridLayout(grp)
-        layout.setSpacing(4)
+        # The controls are disabled without a board; the title stays clickable
+        body = QWidget()
+        self.board_panel = body
+        layout = self._panel_grid(body, 4)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         # MUX
         layout.addWidget(QLabel("MUX Output"), 0, 0)
@@ -441,6 +552,7 @@ class AFMMainWindow(QMainWindow):
         layout.addWidget(self.mux_in, 1, 1)
 
         mux_btns = QHBoxLayout()
+        mux_btns.setSpacing(PANEL_COLUMN_SPACING)
         self.mux_set_btn = QPushButton("Set Route")
         self.mux_set_btn.clicked.connect(self._on_mux_set)
         mux_btns.addWidget(self.mux_set_btn)
@@ -474,6 +586,7 @@ class AFMMainWindow(QMainWindow):
 
         # Board reset / status
         board_btns = QHBoxLayout()
+        board_btns.setSpacing(PANEL_COLUMN_SPACING)
         self.board_status_btn = QPushButton("Board Status")
         self.board_status_btn.clicked.connect(self._on_board_status)
         board_btns.addWidget(self.board_status_btn)
@@ -506,16 +619,21 @@ class AFMMainWindow(QMainWindow):
         self.sample_gain_spin.editingFinished.connect(self._on_sample_gain_edited)
         layout.addWidget(self.sample_gain_spin, 10, 1)
 
-        return grp
+        box = CollapsibleGroupBox("Board Configuration", body)
+        box.set_expanded(self._settings.value(SETTINGS_BOARD_EXPANDED, True, type=bool))
+        box.expanded_changed.connect(
+            lambda expanded: self._settings.setValue(SETTINGS_BOARD_EXPANDED, expanded))
+        self.board_box = box
+        return box
 
     # --- Measurement panel ---
     def _build_measurement_panel(self) -> QGroupBox:
         grp = QGroupBox("Measurement")
-        layout = QGridLayout(grp)
-        layout.setSpacing(4)
+        layout = self._panel_grid(grp, 4)
 
         # Mode radio buttons
         mode_row = QHBoxLayout()
+        mode_row.setSpacing(PANEL_COLUMN_SPACING)
         self.mode_group = QButtonGroup(self)
         self.radio_sinc = QRadioButton("Sinc (broadband)")
         self.radio_sweep = QRadioButton("Sweep")
@@ -698,6 +816,9 @@ class AFMMainWindow(QMainWindow):
             info_grid.addWidget(lbl, row, col)
             val = QLabel("N/A")
             val.setStyleSheet(f"color: {TEXT}; font-weight: bold; font-size: 12px; border: none;")
+            val.ensurePolished()
+            val.setMinimumWidth(val.fontMetrics().horizontalAdvance(INFO_VALUE_SAMPLE))
+            val.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             info_grid.addWidget(val, row, col + 1)
             self.info_labels[key] = val
 
@@ -1082,6 +1203,7 @@ class AFMMainWindow(QMainWindow):
         self.measure_btn.setText("■  Cancel")
         self.statusBar().showMessage(f"Measuring… {desc}")
         self._pending_measure_mode = mode
+        self._pending_measure_params = params
         self._cancelling = False
 
         self._worker = MeasureWorker(self.client, mode, params)
@@ -1116,6 +1238,7 @@ class AFMMainWindow(QMainWindow):
             return
         self._last_spectrum = spectrum
         self._last_measure_mode = self._pending_measure_mode
+        self._last_measure_params = self._pending_measure_params
         self._set_controls_enabled(True)
         self.measure_btn.setText("▶  Measure")
         self._update_plots(spectrum)
@@ -1228,6 +1351,21 @@ class AFMMainWindow(QMainWindow):
             ri += 1
         return li, ri
 
+    @staticmethod
+    def _half_power_edges(freq: np.ndarray, mag: np.ndarray, peak_idx: int):
+        """Frequencies where the magnitude crosses ``peak / sqrt(2)``, interpolated between
+        points. An edge that reaches the end of the span stays on the last point."""
+        li, ri = AFMMainWindow._find_3db_region(mag, peak_idx)
+        threshold = mag[peak_idx] / np.sqrt(2.0)
+
+        def crossing(inside: int, outside: int) -> float:
+            t = (mag[inside] - threshold) / (mag[inside] - mag[outside])
+            return float(freq[inside] + t * (freq[outside] - freq[inside]))
+
+        low = crossing(li, li - 1) if li > 0 else float(freq[li])
+        high = crossing(ri, ri + 1) if ri < mag.size - 1 else float(freq[ri])
+        return low, high
+
     def _delay_slope(self, freq_khz: np.ndarray, phase_deg: np.ndarray,
                      mag: np.ndarray, edge_margin: int = 0) -> float:
         """Slope (deg/kHz) of the path delay, leaving the resonance phase step alone.
@@ -1299,6 +1437,11 @@ class AFMMainWindow(QMainWindow):
             self._freq_unit = "kHz"
         freq_display = freq_khz * freq_scale
 
+        params = self._last_measure_params
+        if is_sinc and "bandwidth" in params:
+            mag_raw = mag_raw * sinc_amplitude_scale(
+                params["bandwidth"], params["samples"], params["decimation"])
+
         max_mag = float(np.max(np.abs(mag_raw))) if mag_raw.size else 0.0
         if max_mag >= 1.0:
             mag_scale = 1.0
@@ -1337,6 +1480,8 @@ class AFMMainWindow(QMainWindow):
         self.mag_plot.setLabel("bottom", "Frequency", units=self._freq_unit)
         self.phase_plot.setLabel("bottom", "Frequency", units=self._freq_unit)
         self.mag_plot.setLabel("left", "Magnitude", units=self._mag_unit)
+        self.mag_plot.setTitle("Magnitude (sine equivalent)"
+                               if self._last_measure_mode == "sinc" else "Magnitude")
 
         # Magnitude
         self.mag_curve.setData(freq, mag)
@@ -1350,10 +1495,8 @@ class AFMMainWindow(QMainWindow):
                 self.mag_plot.removeItem(item)
 
         threshold = mag[peak_idx] / np.sqrt(2)
-        li, ri = self._find_3db_region(mag, peak_idx)
-        if ri > li:
-            f_low = freq[li]
-            f_high = freq[ri]
+        f_low, f_high = self._half_power_edges(freq, mag, peak_idx)
+        if f_high > f_low:
             line_pen = pg.mkPen("#22c55e", width=1, style=Qt.PenStyle.DotLine)
             self.mag_plot.addItem(pg.InfiniteLine(pos=f_low, angle=90, pen=line_pen))
             self.mag_plot.addItem(pg.InfiniteLine(pos=f_high, angle=90, pen=line_pen))
@@ -1387,6 +1530,7 @@ class AFMMainWindow(QMainWindow):
         if spectrum.num_points == 0:
             for key in ("peak_freq", "peak_mag", "peak_phase", "bw", "q_factor"):
                 self.info_labels[key].setText("N/A")
+                self.info_labels[key].setToolTip("")
             self.info_labels["points"].setText("0")
             self.info_labels["meas_time"].setText(f"{self._measure_time:.2f} s")
             return
@@ -1397,7 +1541,7 @@ class AFMMainWindow(QMainWindow):
         peak_idx = self._find_peak_index(mag)
 
         self.info_labels["peak_freq"].setText(f"{freq[peak_idx]:.3f} {self._freq_unit}")
-        self.info_labels["peak_mag"].setText(f"{mag[peak_idx]:.4e} {self._mag_unit}")
+        self.info_labels["peak_mag"].setText(f"{mag[peak_idx]:.4g} {self._mag_unit}")
         self.info_labels["peak_phase"].setText(f"{phase_deg[peak_idx]:.1f}°")
         self.info_labels["points"].setText(str(spectrum.num_points))
         self.info_labels["meas_time"].setText(f"{self._measure_time:.2f} s")
@@ -1405,23 +1549,26 @@ class AFMMainWindow(QMainWindow):
         # -3dB bandwidth and Q-factor from raw kHz, measured as the contiguous
         # half-power band around the detected peak (walking outward), so the
         # band-edge noise spikes can't blow up the bandwidth.
-        mag_raw = spectrum.magnitude
-        li, ri = self._find_3db_region(mag_raw, peak_idx)
-        bw_khz = spectrum.freq_kHz[ri] - spectrum.freq_kHz[li]
-        if ri > li and bw_khz > 0:
-            q = spectrum.freq_kHz[peak_idx] / bw_khz
-            bw_hz = bw_khz * 1000.0
-            if bw_hz >= 1e6:
-                bw_text = f"{bw_hz / 1e6:.3f} MHz"
-            elif bw_hz >= 1e3:
-                bw_text = f"{bw_hz / 1e3:.3f} kHz"
-            else:
-                bw_text = f"{bw_hz:.1f} Hz"
-            self.info_labels["bw"].setText(bw_text)
-            self.info_labels["q_factor"].setText(f"{q:.0f}")
+        freq_khz = spectrum.freq_kHz.astype(np.float64)
+        f_low, f_high = self._half_power_edges(freq_khz, spectrum.magnitude, peak_idx)
+        bw_khz = f_high - f_low
+        f0_khz = freq_khz[peak_idx]
+        step_khz = float(np.median(np.diff(freq_khz))) if freq_khz.size > 1 else 0.0
+        limit_khz = MIN_RESOLVED_STEPS * step_khz
+        tooltip = ""
+        if bw_khz <= 0:
+            bw_text = q_text = "N/A"
+        elif bw_khz < limit_khz:
+            bw_text = f"< {format_hz(limit_khz * 1e3)}"
+            q_text = f"> {f0_khz / limit_khz:.0f}"
+            tooltip = (f"Narrower than {MIN_RESOLVED_STEPS} frequency steps: the resolution, "
+                       "not the resonance. Use more samples, a higher decimation or a finer step.")
         else:
-            self.info_labels["bw"].setText("N/A")
-            self.info_labels["q_factor"].setText("N/A")
+            bw_text = format_hz(bw_khz * 1e3)
+            q_text = f"{f0_khz / bw_khz:.0f}"
+        for key, text in (("bw", bw_text), ("q_factor", q_text)):
+            self.info_labels[key].setText(text)
+            self.info_labels[key].setToolTip(tooltip)
 
     # ---------------------------------------------------------------
     # Crosshair

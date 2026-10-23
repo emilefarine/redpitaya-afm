@@ -25,9 +25,9 @@ from afm_client import (
     AFMError,
     GainSetting,
     SpectrumData,
+    sinc_amplitude_scale,
 )
 
-ADC_CLOCK_HZ = 125e6
 MAX_SAMPLES = 65536
 
 DEFAULT_AMPLITUDE = 0.25  # 0.5 V at the ADC even with a loop gain of 2
@@ -101,8 +101,7 @@ def inner_band(spectrum: SpectrumData, center_khz: float, bandwidth_khz: float) 
 def expected_sinc_level(amplitude: float, gain: float, decimation: int,
                         bandwidth_khz: float, num_samples: int) -> float:
     """In-band FFT magnitude of the sinc excitation (rectangle of height A / 2B, scaled 1/N)."""
-    fs = ADC_CLOCK_HZ / decimation
-    return amplitude * gain * fs / (2.0 * bandwidth_khz * 1e3 * num_samples)
+    return amplitude * gain / sinc_amplitude_scale(bandwidth_khz, num_samples, decimation)
 
 
 def _all_finite(spectrum: SpectrumData) -> bool:

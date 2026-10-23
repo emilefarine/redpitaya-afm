@@ -25,6 +25,7 @@ from afm_client import (  # noqa: E402
     GainSetting,
     OperatingMode,
     SystemStatus,
+    sinc_amplitude_scale,
 )
 
 
@@ -651,6 +652,11 @@ class SharedConstantsTests(unittest.TestCase):
 
     def test_decimations_are_the_powers_of_two_the_server_accepts(self):
         self.assertEqual(DECIMATIONS, tuple(2 ** n for n in range(4, 11)))
+
+    def test_sinc_scale_matches_the_bench_loopback(self):
+        # Direct cable, amplitude 0.25, sweep loop gain 0.960: the sinc read 2.864e-4 per bin
+        amplitude = 2.864e-4 * sinc_amplitude_scale(100.0, 8192, 64)
+        self.assertAlmostEqual(amplitude, 0.25 * 0.960, delta=0.003)
 
 
 if __name__ == "__main__":

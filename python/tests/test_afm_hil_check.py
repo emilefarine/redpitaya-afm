@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import afm_hil_check as hil  # noqa: E402
 from afm_client import (  # noqa: E402
+    AFMClient,
     AFMCommandError,
     AFMConnectionError,
     GainSetting,
@@ -85,7 +86,7 @@ class FakeLoop:
 
     def measure_sweep(self, center_kHz, range_kHz, step_kHz, decimation, amplitude):
         self.saturated = self.fault == "saturated"
-        fs = hil.ADC_CLOCK_HZ / decimation
+        fs = AFMClient.ADC_SAMPLE_RATE_HZ / decimation
         start, stop = center_kHz - range_kHz / 2, center_kHz + range_kHz / 2
         count = int(np.floor((stop - start) / step_kHz * (1 + 1e-6))) + 1
         n = np.arange(8192)
@@ -107,7 +108,7 @@ class FakeLoop:
         self.saturated = self.fault == "saturated"
         if self.fault == "stale" and num_samples in self.first_sinc:
             return self.first_sinc[num_samples]
-        fs = hil.ADC_CLOCK_HZ / decimation
+        fs = AFMClient.ADC_SAMPLE_RATE_HZ / decimation
         t = (np.arange(num_samples) - num_samples // 2) / fs - self.delay_s
         bw, fc = bandwidth_kHz * 1e3, center_kHz * 1e3
         acquired = (self._loop_gain(decimation, amplitude) * amplitude *

@@ -153,6 +153,15 @@ GUI commands run in the background, so a server that stops answering never freez
 window. While a measurement runs, the Measure button becomes Cancel: it closes the connection
 and reconnects (a server from 2.9.0 also stops the sweep). In the CLI, Ctrl+C cancels.
 
+The -3 dB band and the Q-factor are interpolated between points. When the band is narrower
+than 3 frequency steps, it is the resolution and not the resonance: the GUI then shows a bound
+(for example `< 22.4 Hz` and `> 6872`). Use more samples, a higher decimation or a finer
+step to resolve it.
+
+Click the "Board Configuration" title to fold that panel and keep the measurement controls
+in view on a small screen; the GUI remembers the choice. The sidebar scrolls when the screen
+is too short.
+
 The GUI has an "Open Routing Schematic" button showing the live 4x4 crossbar
 routing and PGA gains (read from `BOARD:STATUS?`); the same dialog runs
 standalone without hardware for preview:
@@ -246,6 +255,12 @@ header line, so a client can read it in one shot instead of scanning for newline
 account for the one-sample delay between generation and acquisition, so a direct cable
 reads about 0 with a small lag from the cable and converters. The sweep fits a sine with an
 offset, so a DC offset on the input does not leak into the low-frequency points.
+
+The `MEASURE:SWEEP` magnitude is the amplitude of the response in volts. The `MEASURE:SINC`
+magnitude is a per-bin FFT level that depends on the band and the record: multiply it by
+`2 * bandwidth * samples / fs` (`sinc_amplitude_scale` in `afm_client.py`) to get the
+amplitude a sine of the same setting would give. The GUI plots the sinc that way, so sinc and
+sweep read in the same volts.
 
 `BOARD:STATUS?` returns `OK LINES <N>` followed by the `N` lines of the board status block.
 
